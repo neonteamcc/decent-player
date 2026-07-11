@@ -395,8 +395,9 @@ class UsbAudioSink(
             if (streamAlive) {
                 if (usbStartMediaTimeNeedsInit) return AudioSink.CURRENT_POSITION_NOT_SET
                 val frames = usbAudioStream?.framesWritten ?: 0L
-                return if (currentSampleRate > 0) {
-                    usbStartMediaTimeUs + frames * C.MICROS_PER_SECOND / currentSampleRate
+                val posRate = if (currentUsbRate > 0) currentUsbRate else currentSampleRate
+                return if (posRate > 0) {
+                    usbStartMediaTimeUs + frames * C.MICROS_PER_SECOND / posRate
                 } else AudioSink.CURRENT_POSITION_NOT_SET
             }
         }
@@ -509,23 +510,34 @@ class UsbAudioSink(
         }
 
         // Always use the DAC's highest supported bit depth (standard practice).
-        // Sources with lower bit depth are zero-padded in the LSBs.
+        // Sources with lower bit depth are zero-padded in the LSBs; sources
+        // deeper than the device get TPDF-dithered reduction in native code.
         val bitDepth = deviceInfo.bestBitDepth
         val altSetting = deviceInfo.bestAltSetting
+
+        // Rate mapping: sources above the device's ceiling play via
+        // in-family integer decimation (192k→96k ÷2, 384k→96k ÷4,
+        // 176.4k→88.2k ÷2). usbRate is what the DAC runs at; the native
+        // layer decimates sampleRate → usbRate.
+        val (usbRate, decimation) = chooseUsbRate(deviceInfo, altSetting, sampleRate)
+        if (decimation > 1) {
+            Log.i(TAG, "Rate $sampleRate not supported — decimating ÷$decimation → $usbRate Hz")
+        }
         Log.i(TAG, "Bit-perfect: source=${trackBitDepth}bit → alt=$altSetting usb=${bitDepth}bit " +
-                "clockSource=0x${deviceInfo.clockSourceId.toString(16)}")
+                "rate=$sampleRate→$usbRate clockSource=0x${deviceInfo.clockSourceId.toString(16)}")
 
         var stream = UsbAudioStream(
             fd = deviceInfo.fd,
             interfaceId = deviceInfo.interfaceId,
             endpointOut = deviceInfo.endpointOutAddress,
             endpointFeedback = deviceInfo.endpointFeedbackAddress,
-            sampleRate = sampleRate,
+            sampleRate = usbRate,
             channelCount = channelCount,
             bitDepth = bitDepth,
             maxPacketSize = deviceInfo.maxPacketSize,
             packetsPerSecond = deviceInfo.busSpeed.packetsPerSecond,
-            feedbackMaxPacket = feedbackMaxPacket(deviceInfo, altSetting)
+            feedbackMaxPacket = feedbackMaxPacket(deviceInfo, altSetting),
+            decimationFactor = decimation
         )
 
         if (!stream.isReady) {
@@ -564,12 +576,13 @@ class UsbAudioSink(
                 interfaceId = deviceInfo.interfaceId,
                 endpointOut = deviceInfo.endpointOutAddress,
                 endpointFeedback = deviceInfo.endpointFeedbackAddress,
-                sampleRate = sampleRate,
+                sampleRate = usbRate,
                 channelCount = channelCount,
                 bitDepth = bitDepth,
                 maxPacketSize = deviceInfo.maxPacketSize,
                 packetsPerSecond = deviceInfo.busSpeed.packetsPerSecond,
-                feedbackMaxPacket = feedbackMaxPacket(deviceInfo, altSetting)
+                feedbackMaxPacket = feedbackMaxPacket(deviceInfo, altSetting),
+                decimationFactor = decimation
             )
             if (!stream.isReady) {
                 Log.e(TAG, "USB stream recreation failed after reopen")
@@ -583,10 +596,10 @@ class UsbAudioSink(
         if (deviceInfo.uacVersion == UacVersion.UAC1) {
             val layoutAlt = deviceInfo.layout?.streamingAlts
                 ?.firstOrNull { it.altSetting == altSetting }
-            if (layoutAlt != null && !layoutAlt.supportsRate(sampleRate)) {
-                Log.w(TAG, "UAC1 alt $altSetting does not advertise $sampleRate Hz " +
-                        "(supported: ${layoutAlt.sampleRates}) — playback will be " +
-                        "wrong until in-family decimation lands (docs/driver/14)")
+            if (layoutAlt != null && !layoutAlt.supportsRate(usbRate)) {
+                Log.w(TAG, "UAC1 alt $altSetting does not advertise $usbRate Hz " +
+                        "(supported: ${layoutAlt.sampleRates}) — no in-family " +
+                        "mapping found, playback will be wrong")
             }
 
             // Step 2 (UAC1): activate the streaming alt — the endpoint (and
@@ -595,20 +608,20 @@ class UsbAudioSink(
             Log.i(TAG, "Step 2 (UAC1): setAlt($altSetting): $altResult")
 
             // Step 3 (UAC1): SET_CUR to the endpoint, then echo-verify.
-            val rateSet = usbAudioDevice.setSampleRate(sampleRate)
+            val rateSet = usbAudioDevice.setSampleRate(usbRate)
             val echo = usbAudioDevice.readSampleRate()
-            Log.i(TAG, "Step 3 (UAC1): SET_CUR=$sampleRate set=$rateSet echo=$echo")
-            if (echo > 0 && echo != sampleRate) {
-                Log.w(TAG, "UAC1 rate echo mismatch: asked $sampleRate got $echo " +
+            Log.i(TAG, "Step 3 (UAC1): SET_CUR=$usbRate set=$rateSet echo=$echo")
+            if (echo > 0 && echo != usbRate) {
+                Log.w(TAG, "UAC1 rate echo mismatch: asked $usbRate got $echo " +
                         "— device may resample or firmware rounds the readback")
             }
         } else {
             // Step 2 (UAC2): SET_CUR — write new sample rate to the clock
-            usbAudioDevice.setSampleRate(sampleRate)
+            usbAudioDevice.setSampleRate(usbRate)
 
             // Step 3 (UAC2): GET_CUR(CLOCK_VALID_CONTROL) — verify clock lock
             val clockValid = usbAudioDevice.readClockValid()
-            Log.i(TAG, "Step 2-3: SET_CUR=$sampleRate, CLOCK_VALID=$clockValid")
+            Log.i(TAG, "Step 2-3: SET_CUR=$usbRate, CLOCK_VALID=$clockValid")
 
             // Step 4 (UAC2): setAlt(0) AGAIN — defensive reset after clock change
             usbAudioDevice.setAltSetting(0)
@@ -630,6 +643,7 @@ class UsbAudioSink(
 
         usbAudioStream = stream
         currentSampleRate = sampleRate
+        currentUsbRate = usbRate
         currentChannelCount = channelCount
         muteDelegateIfNeeded()
 
@@ -692,6 +706,35 @@ class UsbAudioSink(
         // Fallback: ExoPlayer pipeline via streaming thread
         usbStreamingThread = UsbStreamingThread(stream).also { it.start() }
         Log.i(TAG, "Using ExoPlayer pipeline (non-FLAC or engine failed)")
+    }
+
+    /** USB (output) rate of the active stream; differs from
+     *  [currentSampleRate] when decimation is active. */
+    private var currentUsbRate: Int = 0
+
+    /**
+     * Map a track rate onto the device: passthrough when advertised (and,
+     * at full speed, when it fits wMaxPacketSize), else in-family integer
+     * division (÷2, ÷4). UAC2 devices advertise no rates in the format
+     * descriptor (supportsRate is permissive) → passthrough, as before.
+     * @return Pair(usbRate, decimationFactor)
+     */
+    private fun chooseUsbRate(
+        info: com.decent.usbaudio.UsbAudioDeviceInfo,
+        altSetting: Int,
+        trackRate: Int
+    ): Pair<Int, Int> {
+        val alt = info.layout?.streamingAlts?.firstOrNull { it.altSetting == altSetting }
+            ?: return trackRate to 1
+        fun ok(r: Int) = alt.supportsRate(r) &&
+            (info.busSpeed != com.decent.usbaudio.descriptor.UsbBusSpeed.FULL ||
+                alt.rateFitsMaxPacket(r))
+        return when {
+            ok(trackRate) -> trackRate to 1
+            trackRate % 2 == 0 && ok(trackRate / 2) -> trackRate / 2 to 2
+            trackRate % 4 == 0 && ok(trackRate / 4) -> trackRate / 4 to 4
+            else -> trackRate to 1 // no mapping — logged by the UAC1 warning
+        }
     }
 
     /** wMaxPacketSize of the alt setting's feedback endpoint, or 0. */

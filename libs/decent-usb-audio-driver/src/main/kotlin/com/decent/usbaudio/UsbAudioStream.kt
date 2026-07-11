@@ -40,6 +40,11 @@ import android.util.Log
  * @param feedbackMaxPacket wMaxPacketSize of the feedback endpoint
  *                         (3 = full-speed Q10.14, 4 = Q16.16), or 0 to
  *                         use the speed-appropriate spec default.
+ * @param decimationFactor 1 (default) = bit-perfect passthrough; 2 or 4 =
+ *                         half-band decimation for sources above the
+ *                         device's rate ceiling (192k→96k etc.).
+ *                         [sampleRate] is the USB (output) rate; write()
+ *                         callers feed sampleRate × decimationFactor.
  */
 class UsbAudioStream(
         fd: Int,
@@ -51,7 +56,8 @@ class UsbAudioStream(
         bitDepth: Int,
         maxPacketSize: Int,
         packetsPerSecond: Int = 8000,
-        feedbackMaxPacket: Int = 0
+        feedbackMaxPacket: Int = 0,
+        decimationFactor: Int = 1
 ) {
 
     /** Native UsbAudioContext pointer. Exposed for NativeAudioEngine which
@@ -63,7 +69,7 @@ class UsbAudioStream(
         nativeHandle = nativeUsbAudioCreate(
                 fd, interfaceId, endpointOut, endpointFeedback,
                 sampleRate, channelCount, bitDepth, maxPacketSize,
-                packetsPerSecond, feedbackMaxPacket
+                packetsPerSecond, feedbackMaxPacket, decimationFactor
         )
         if (nativeHandle == 0L) {
             Log.e(TAG, "nativeUsbAudioCreate returned 0 — check logcat for native errors")
@@ -200,7 +206,7 @@ class UsbAudioStream(
     private external fun nativeUsbAudioCreate(
             fd: Int, interfaceId: Int, endpointOut: Int, endpointFeedback: Int,
             sampleRate: Int, channelCount: Int, bitDepth: Int, maxPacketSize: Int,
-            packetsPerSecond: Int, feedbackMaxPacket: Int
+            packetsPerSecond: Int, feedbackMaxPacket: Int, decimationFactor: Int
     ): Long
 
     private external fun nativeUsbAudioSetAltSetting(handle: Long, altSetting: Int): Boolean

@@ -15,6 +15,8 @@
 #include <cstdint>
 #include <linux/usbdevice_fs.h>
 
+struct Decimator; // decimator.h
+
 /**
  * Maximum isochronous packets per URB submission (compile-time capacity;
  * the runtime count is UsbAudioContext::packetsPerUrb).
@@ -114,6 +116,21 @@ struct UsbAudioContext {
      */
     int32_t feedbackPacketLen;
 
+    // ── In-family integer decimation (192k → 96k on capped devices) ──
+    /** 1 = passthrough (default), 2 or 4 = half-band decimation. */
+    int32_t decimationFactor;
+
+    /** Streaming decimator instance, non-null when decimationFactor > 1. */
+    Decimator *decimator;
+
+    /** Canonical full-scale int32 staging buffer (input domain). */
+    uint8_t *canonicalBuffer;
+    int32_t canonicalCapacity;
+
+    /** Decimated canonical int32 buffer (output domain). */
+    uint8_t *decimatedBuffer;
+    int32_t decimatedCapacity;
+
     std::atomic<bool> running;
 
     /** Scratch buffer for PCM format conversion (float -> int16/24/32). */
@@ -203,3 +220,14 @@ void ditherInt24ToInt16(const uint8_t *src, uint8_t *dst, int numSamples, uint32
 
 /** int32 → 16-bit with TPDF dither at the target LSB. */
 void ditherInt32ToInt16(const uint8_t *src, uint8_t *dst, int numSamples, uint32_t *ditherState);
+
+/** Full-scale int32 → 24-bit packed (3 bytes/sample): take the high 24 bits. */
+void packInt32ToInt24(const uint8_t *src, uint8_t *dst, int numSamples);
+
+/**
+ * Decimate canonical int32 PCM through ctx->decimator and convert to the
+ * DAC bit depth into ctx->transferBuffer.
+ * @return output byte count (0 when nothing was produced).
+ * Safe to call with src == ctx->canonicalBuffer.
+ */
+int decimateAndConvert(UsbAudioContext *ctx, const uint8_t *canonicalSrc, int inFrames);

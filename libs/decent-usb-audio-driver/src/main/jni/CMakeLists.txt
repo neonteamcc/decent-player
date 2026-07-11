@@ -20,6 +20,7 @@ add_subdirectory("${FLAC_MODULE_DIR}/libflac"
 add_library(decent_usb_audio SHARED
     usb-audio-output.cpp
     native-audio-engine.cpp
+    decimator.cpp
     "${FLAC_MODULE_DIR}/flac_parser.cc"
 )
 

@@ -11,6 +11,7 @@
  */
 
 #include "usb-audio-output.h"
+#include "decimator.h"
 
 #include <jni.h>
 #include <android/log.h>
@@ -437,8 +438,10 @@ static int drainAllUrbs(UsbAudioContext *ctx) {
 
 // ── JNI entry points ────────────────────────────────────────────────
 
-// Forward declaration (defined after integer padding functions, non-static for native-audio-engine)
+// Forward declarations (defined after the integer padding functions;
+// submitPcmToUrbs/decimateAndConvert are non-static for native-audio-engine)
 void submitPcmToUrbs(UsbAudioContext *ctx, const uint8_t *pcmData, int totalBytes);
+static bool ensureBuffer(uint8_t **buf, int32_t *capacity, int needed);
 
 extern "C" {
 
@@ -446,9 +449,10 @@ JNIEXPORT jlong JNICALL
 Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioCreate(
         JNIEnv *, jobject, jint fd, jint ifId, jint epOut, jint epFb,
         jint rate, jint ch, jint bits, jint maxPkt, jint packetsPerSecond,
-        jint feedbackMaxPacket) {
-    LOGI("Create: fd=%d ep=0x%02x rate=%d ch=%d bits=%d maxPkt=%d pps=%d fbMaxPkt=%d",
-         fd, epOut, rate, ch, bits, maxPkt, packetsPerSecond, feedbackMaxPacket);
+        jint feedbackMaxPacket, jint decimationFactor) {
+    LOGI("Create: fd=%d ep=0x%02x rate=%d ch=%d bits=%d maxPkt=%d pps=%d fbMaxPkt=%d decim=%d",
+         fd, epOut, rate, ch, bits, maxPkt, packetsPerSecond, feedbackMaxPacket,
+         decimationFactor);
     auto *ctx = new(std::nothrow) UsbAudioContext();
     if (!ctx) return 0;
     ctx->fd = fd;
@@ -492,6 +496,25 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioCreate(
         ctx->feedbackPacketLen = feedbackMaxPacket;
     } else {
         ctx->feedbackPacketLen = (ctx->packetsPerSecond == 1000) ? 3 : 4;
+    }
+
+    // In-family decimation (e.g. 192k source on a 96k-capped device).
+    // ctx->sampleRate is the USB (output) rate; write paths feed the
+    // decimator at sampleRate × decimationFactor.
+    ctx->decimationFactor =
+            (decimationFactor == 2 || decimationFactor == 4) ? decimationFactor : 1;
+    ctx->decimator = nullptr;
+    ctx->canonicalBuffer = nullptr;
+    ctx->canonicalCapacity = 0;
+    ctx->decimatedBuffer = nullptr;
+    ctx->decimatedCapacity = 0;
+    if (ctx->decimationFactor > 1) {
+        ctx->decimator = decimatorCreate(ch, ctx->decimationFactor);
+        if (!ctx->decimator) {
+            LOGE("Create: decimatorCreate(ch=%d, f=%d) failed — passthrough",
+                 ch, ctx->decimationFactor);
+            ctx->decimationFactor = 1;
+        }
     }
 
     ctx->running.store(false);
@@ -620,6 +643,26 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioWrite(
     // Convert float PCM to target bit depth
     jfloat *f = env->GetFloatArrayElements(pcm, nullptr);
     if (!f) return;
+
+    // In-family decimation path: float → full-scale int32 → half-band
+    // decimate → DAC depth (dithered when reducing to 16-bit).
+    if (ctx->decimationFactor > 1 && ctx->decimator) {
+        int canonBytes = totalSamples * 4;
+        if (!ensureBuffer(&ctx->canonicalBuffer, &ctx->canonicalCapacity, canonBytes)) {
+            env->ReleaseFloatArrayElements(pcm, f, JNI_ABORT);
+            return;
+        }
+        convertFloatToInt32(f, ctx->canonicalBuffer, totalSamples);
+        env->ReleaseFloatArrayElements(pcm, f, JNI_ABORT);
+
+        int outBytes = decimateAndConvert(ctx, ctx->canonicalBuffer, totalFrames);
+        if (outBytes > 0) {
+            submitPcmToUrbs(ctx, ctx->transferBuffer, outBytes);
+            ctx->framesWritten += outBytes / ctx->bytesPerFrame;
+        }
+        return;
+    }
+
     switch (ctx->bitDepth) {
         case 16: convertFloatToInt16(f, ctx->transferBuffer, totalSamples); break;
         case 24: convertFloatToInt24(f, ctx->transferBuffer, totalSamples); break;
@@ -669,7 +712,8 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeFlush(
     ctx->frameAccumulator = 0.0;
     ctx->residualBytes = 0;
     ctx->framesWritten = 0;
-    LOGI("Flush: frameAccumulator, residual, and framesWritten reset");
+    if (ctx->decimator) decimatorReset(ctx->decimator);
+    LOGI("Flush: frameAccumulator, residual, framesWritten (and decimator) reset");
 }
 
 JNIEXPORT jint JNICALL
@@ -696,6 +740,9 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioDestroy(
     free(ctx->feedbackUrb);
     ctx->feedbackUrb = nullptr;
     free(ctx->transferBuffer);
+    decimatorDestroy(ctx->decimator);
+    free(ctx->canonicalBuffer);
+    free(ctx->decimatedBuffer);
     LOGI("Destroy: %lld frames total", (long long)ctx->framesWritten);
     delete ctx;
 }
@@ -819,6 +866,73 @@ void ditherInt32ToInt16(const uint8_t *src, uint8_t *dst, int numSamples, uint32
         if (v < -32768) v = -32768;
         out[i] = (int16_t)v;
     }
+}
+
+// Full-scale int32 → 24-bit packed: keep the high 24 bits (LSBs below the
+// 24-bit target are the decimator's sub-LSB residue — truncation there is
+// below the 24-bit noise floor).
+void packInt32ToInt24(const uint8_t *src, uint8_t *dst, int numSamples) {
+    auto *in32 = reinterpret_cast<const int32_t *>(src);
+    for (int i = 0; i < numSamples; i++) {
+        int32_t v = in32[i] >> 8;
+        dst[i*3] = v & 0xFF;
+        dst[i*3+1] = (v >> 8) & 0xFF;
+        dst[i*3+2] = (v >> 16) & 0xFF;
+    }
+}
+
+// ── Decimation pipeline (shared by WriteRaw / float write / engine) ──
+
+static bool ensureBuffer(uint8_t **buf, int32_t *capacity, int needed) {
+    if (*buf && *capacity >= needed) return true;
+    free(*buf);
+    *buf = (uint8_t *)malloc(needed);
+    *capacity = *buf ? needed : 0;
+    return *buf != nullptr;
+}
+
+/**
+ * Decimate canonical full-scale int32 PCM and convert to the DAC bit depth
+ * into ctx->transferBuffer. See usb-audio-output.h.
+ */
+int decimateAndConvert(UsbAudioContext *ctx, const uint8_t *canonicalSrc, int inFrames) {
+    if (!ctx->decimator || inFrames <= 0) return 0;
+
+    int maxOutFrames = decimatorMaxOutFrames(ctx->decimator, inFrames);
+    int decimBytes = maxOutFrames * ctx->channelCount * 4;
+    if (!ensureBuffer(&ctx->decimatedBuffer, &ctx->decimatedCapacity, decimBytes))
+        return 0;
+
+    int outFrames = decimatorProcess(
+            ctx->decimator,
+            reinterpret_cast<const int32_t *>(canonicalSrc), inFrames,
+            reinterpret_cast<int32_t *>(ctx->decimatedBuffer));
+    if (outFrames <= 0) return 0;
+
+    int outSamples = outFrames * ctx->channelCount;
+    int outBytes = outSamples * ctx->bytesPerSample;
+    if (!ctx->transferBuffer || ctx->transferBufferCapacity < outBytes) {
+        free(ctx->transferBuffer);
+        ctx->transferBuffer = (uint8_t *)malloc(outBytes);
+        ctx->transferBufferCapacity = ctx->transferBuffer ? outBytes : 0;
+        if (!ctx->transferBuffer) return 0;
+    }
+
+    switch (ctx->bitDepth) {
+        case 32:
+            memcpy(ctx->transferBuffer, ctx->decimatedBuffer, outSamples * 4);
+            break;
+        case 24:
+            packInt32ToInt24(ctx->decimatedBuffer, ctx->transferBuffer, outSamples);
+            break;
+        case 16:
+            ditherInt32ToInt16(ctx->decimatedBuffer, ctx->transferBuffer,
+                               outSamples, &ctx->ditherState);
+            break;
+        default:
+            return 0;
+    }
+    return outBytes;
 }
 
 // ── Shared URB submission logic ─────────────────────────────────────
@@ -964,6 +1078,37 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioWriteRaw(
 
     jbyte *rawData = env->GetByteArrayElements(pcm, nullptr);
     if (!rawData) return;
+
+    // In-family decimation path (e.g. 192k source on a 96k device):
+    // canonicalize to full-scale int32 → half-band decimate → convert to
+    // the DAC depth. The non-decimated paths below stay byte-identical.
+    if (ctx->decimationFactor > 1 && ctx->decimator) {
+        int canonBytes = totalSamples * 4;
+        if (!ensureBuffer(&ctx->canonicalBuffer, &ctx->canonicalCapacity, canonBytes)) {
+            env->ReleaseByteArrayElements(pcm, rawData, JNI_ABORT);
+            return;
+        }
+        switch (inputBitDepth) {
+            case 16: padInt16ToInt32((uint8_t *)rawData, ctx->canonicalBuffer, totalSamples); break;
+            case 24: padInt24ToInt32((uint8_t *)rawData, ctx->canonicalBuffer, totalSamples); break;
+            // Pipeline convention: PCM_32BIT carries sign-extended 24-in-32
+            // (libFLAC extractor) — shift to full scale, same as the
+            // non-decimated 32→32 path.
+            case 32: shiftInt32From24((uint8_t *)rawData, ctx->canonicalBuffer, totalSamples); break;
+            default:
+                LOGE("WriteRaw: unsupported input depth %d for decimation", inputBitDepth);
+                env->ReleaseByteArrayElements(pcm, rawData, JNI_ABORT);
+                return;
+        }
+        env->ReleaseByteArrayElements(pcm, rawData, JNI_ABORT);
+
+        int outBytes = decimateAndConvert(ctx, ctx->canonicalBuffer, totalFrames);
+        if (outBytes > 0) {
+            submitPcmToUrbs(ctx, ctx->transferBuffer, outBytes);
+            ctx->framesWritten += outBytes / ctx->bytesPerFrame;
+        }
+        return;
+    }
 
     // Bit-depth matching: pad input up to the DAC's bit depth (lossless
     // integer ops), or reduce with TPDF dither when the DAC is shallower

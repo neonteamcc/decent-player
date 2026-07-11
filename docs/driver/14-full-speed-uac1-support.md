@@ -67,7 +67,16 @@ own handling:
 - [x] Bit-depth reduction: TPDF-dithered `ditherInt24ToInt16` /
   `ditherInt32ToInt16` wired into both `nativeUsbAudioWriteRaw` and the
   native FLAC engine's conversion matrix (24-bit FLAC on a 16-bit device).
-- [ ] In-family integer decimation (192k→96k ÷2 etc.) — see Rate policy.
+- [x] In-family integer decimation: `decimator.cpp` — 63-tap Kaiser
+  (β 9.6) half-band FIR per ÷2 stage, cascaded for ÷4, double-precision
+  filtering over canonical int32 with streaming state (phase carries
+  across calls; reset on flush). Host-verified: passband −0.0005 dB,
+  stopband leak −104 dB, ÷4 cascade clean. Wired into all three write
+  paths (WriteRaw, float write, native FLAC engine); the wrapper maps
+  unsupported rates via `chooseUsbRate` (÷2 → ÷4, full-speed bandwidth
+  checked), runs the DAC at the mapped rate, and tracks position in the
+  output domain. Passthrough (`decimationFactor = 1`) leaves every legacy
+  path byte-identical.
 - [ ] Validation: full-speed UAC1 (FiiO BTR13-class) and full-speed UAC2
   (Apple dongle-class) hardware, xHCI ftrace packet-size verification,
   high-speed UAC2 regression (existing devices must be byte-identical).
