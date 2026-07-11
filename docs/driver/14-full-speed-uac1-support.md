@@ -68,3 +68,15 @@ single-packet feedback URBs paced by bRefresh, per-packet sanity windows
 Contributions of descriptor dumps for full-speed devices are very welcome
 — see `docs/hardware/fixtures/README.md` for the format and
 [CONTRIBUTING.md](../../CONTRIBUTING.md).
+
+## Rate policy (decided)
+
+Tracks whose sample rate exceeds the device's ceiling still play:
+in-family integer decimation to the highest supported rate
+(192k → 96k ÷2, 384k → 96k ÷4, 176.4k → 88.2k ÷2) via a half-band FIR —
+deterministic, cheap, no asynchronous SRC. Combined with dithered
+bit-depth reduction when needed (192/24 → 96/16 on a 16-bit/96k device).
+Cross-family fractional SRC (44.1-family source onto a 48-only device)
+is out of scope until a real device needs it. The engagement badge
+reports the honest mode; bit-perfect claims are made only when the
+stream is untouched.
