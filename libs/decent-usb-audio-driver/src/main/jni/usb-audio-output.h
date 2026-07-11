@@ -16,25 +16,33 @@
 #include <linux/usbdevice_fs.h>
 
 /**
- * Number of isochronous packets per URB submission.
- * At USB high-speed (125us microframes), 8 packets = 1ms of audio.
+ * Maximum isochronous packets per URB submission (compile-time capacity;
+ * the runtime count is UsbAudioContext::packetsPerUrb).
+ * High-speed: 8 packets × 125 µs microframes = 1 ms of audio per URB.
+ * Full-speed: packets are 1 ms frames, so fewer packets per URB keep the
+ * submit/reap granularity comparable (2 packets = 2 ms per URB).
  */
 #define USB_AUDIO_PACKETS_PER_URB 8
 
 /**
- * Number of URBs in the ring buffer.
- * 80 URBs ≈ 80 ms of in-flight audio at 44.1 kHz, which empirically gives
+ * Ring capacity (compile-time; runtime count is UsbAudioContext::numUrbs).
+ * 80 URBs ≈ 80 ms of in-flight audio at high speed, which empirically gives
  * the xHCI host controller enough scheduling headroom to maintain
  * continuous isochronous output without underruns on commodity Android
  * SoCs. Smaller pipelines (< ~64 URBs at 44.1 kHz) trigger glitches as
  * the ring drains faster than the URB submit/reap cycle can refill it.
+ * At full speed the same ~80 ms target is met with 40 URBs × 2 packets.
  */
 #define USB_AUDIO_NUM_URBS 80
 
 /**
  * Max bytes per URB data buffer.
- * Worst case: 384kHz * 4 bytes * 2 channels / 8000 microframes * 8 packets
- *           = 384 * 8 = 3072 bytes per URB. Round up generously.
+ * High-speed worst case: 384kHz × 4 bytes × 2 ch / 8000 microframes
+ *   × 8 packets = 3072 bytes per URB.
+ * Full-speed worst case: 1023 bytes/frame (USB 2.0 §5.6.3 iso ceiling)
+ *   × 2 packets = 2046 bytes per URB.
+ * 4096 covers both; the runtime geometry keeps
+ * packetsPerUrb × maxPacketSize ≤ this bound.
  */
 #define USB_AUDIO_URB_BUFFER_SIZE 4096
 
@@ -74,6 +82,38 @@ struct UsbAudioContext {
     int32_t bytesPerFrame;
     int32_t maxPacketSize;
 
+    // ── Bus-speed-dependent stream geometry (set at create) ─────
+    /**
+     * Isochronous service intervals per second: 8000 at high speed
+     * (125 µs microframes), 1000 at full speed (1 ms frames). Divides the
+     * sample rate into the per-packet frame count.
+     */
+    int32_t packetsPerSecond;
+
+    /** Packets per URB actually used (≤ USB_AUDIO_PACKETS_PER_URB). */
+    int32_t packetsPerUrb;
+
+    /** URB slots actually used (≤ USB_AUDIO_NUM_URBS). */
+    int32_t numUrbs;
+
+    /**
+     * Auto-detected radix shift for feedback values (ALSA "freqshift"):
+     * some devices report in the wrong Q format (off by ×2/×4). INT32_MIN
+     * until the first valid feedback packet locks it in.
+     */
+    int32_t feedbackShift;
+
+    /** LCG state for TPDF dither in the bit-depth reducers. */
+    uint32_t ditherState;
+
+    /**
+     * ISO packet length for feedback URBs = the feedback endpoint's
+     * wMaxPacketSize (3 = full-speed Q10.14, 4 = Q16.16). Requesting more
+     * than wMaxPacketSize makes SUBMITURB fail with EMSGSIZE; requesting
+     * less risks per-packet overflow errors.
+     */
+    int32_t feedbackPacketLen;
+
     std::atomic<bool> running;
 
     /** Scratch buffer for PCM format conversion (float -> int16/24/32). */
@@ -103,12 +143,16 @@ struct UsbAudioContext {
     double frameAccumulator;
 
     /**
-     * Frames per microframe, calibrated from the DAC's async feedback endpoint.
-     * More accurate than the nominal sampleRate/8000.0 calculation because it
-     * reflects the DAC's actual hardware clock frequency.
-     * E.g., nominal 44100Hz = 5.5125 fpmf, but DAC may report 5.5127 (44101.6Hz).
-     * Without calibration, the drift causes periodic pops as the DAC's internal
-     * buffer underflows or overflows.
+     * Frames per isochronous service interval (microframe at high speed,
+     * 1 ms frame at full speed), calibrated from the DAC's async feedback
+     * endpoint when one exists. More accurate than the nominal
+     * sampleRate/packetsPerSecond calculation because it reflects the
+     * DAC's actual hardware clock frequency.
+     * E.g., nominal 44100Hz at HS = 5.5125, but the DAC may report 5.5127
+     * (44101.6Hz). Without calibration, the drift causes periodic pops as
+     * the DAC's internal buffer under/overflows. Adaptive/sync devices
+     * (no feedback endpoint) run on the nominal value — they recover
+     * their clock from our pace, so nominal IS correct for them.
      */
     double calibratedFpmf;
 
@@ -151,3 +195,11 @@ void padInt24ToInt32(const uint8_t *src, uint8_t *dst, int numSamples);
 
 /** int32 (24-bit sign-extended from libFLAC) → 32-bit: shift left 8. */
 void shiftInt32From24(const uint8_t *src, uint8_t *dst, int numSamples);
+
+// ── Bit-depth reduction (TPDF-dithered, for 16-bit-only devices) ────
+
+/** 24-bit packed (3 bytes/sample) → 16-bit with TPDF dither at the target LSB. */
+void ditherInt24ToInt16(const uint8_t *src, uint8_t *dst, int numSamples, uint32_t *ditherState);
+
+/** int32 → 16-bit with TPDF dither at the target LSB. */
+void ditherInt32ToInt16(const uint8_t *src, uint8_t *dst, int numSamples, uint32_t *ditherState);

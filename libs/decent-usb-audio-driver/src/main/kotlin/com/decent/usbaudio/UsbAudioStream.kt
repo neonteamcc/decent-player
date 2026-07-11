@@ -32,6 +32,14 @@ import android.util.Log
  * @param channelCount     Number of channels (1=mono, 2=stereo)
  * @param bitDepth         Bits per sample (16, 24, or 32)
  * @param maxPacketSize    Max packet size from endpoint descriptor
+ * @param packetsPerSecond Isochronous service intervals per second:
+ *                         8000 at high speed (125 µs microframes, the
+ *                         legacy default), 1000 at full speed (1 ms
+ *                         frames). Use [UsbAudioDeviceInfo.busSpeed]'s
+ *                         `packetsPerSecond`.
+ * @param feedbackMaxPacket wMaxPacketSize of the feedback endpoint
+ *                         (3 = full-speed Q10.14, 4 = Q16.16), or 0 to
+ *                         use the speed-appropriate spec default.
  */
 class UsbAudioStream(
         fd: Int,
@@ -41,7 +49,9 @@ class UsbAudioStream(
         sampleRate: Int,
         channelCount: Int,
         bitDepth: Int,
-        maxPacketSize: Int
+        maxPacketSize: Int,
+        packetsPerSecond: Int = 8000,
+        feedbackMaxPacket: Int = 0
 ) {
 
     /** Native UsbAudioContext pointer. Exposed for NativeAudioEngine which
@@ -52,7 +62,8 @@ class UsbAudioStream(
     init {
         nativeHandle = nativeUsbAudioCreate(
                 fd, interfaceId, endpointOut, endpointFeedback,
-                sampleRate, channelCount, bitDepth, maxPacketSize
+                sampleRate, channelCount, bitDepth, maxPacketSize,
+                packetsPerSecond, feedbackMaxPacket
         )
         if (nativeHandle == 0L) {
             Log.e(TAG, "nativeUsbAudioCreate returned 0 — check logcat for native errors")
@@ -188,7 +199,8 @@ class UsbAudioStream(
 
     private external fun nativeUsbAudioCreate(
             fd: Int, interfaceId: Int, endpointOut: Int, endpointFeedback: Int,
-            sampleRate: Int, channelCount: Int, bitDepth: Int, maxPacketSize: Int
+            sampleRate: Int, channelCount: Int, bitDepth: Int, maxPacketSize: Int,
+            packetsPerSecond: Int, feedbackMaxPacket: Int
     ): Long
 
     private external fun nativeUsbAudioSetAltSetting(handle: Long, altSetting: Int): Boolean

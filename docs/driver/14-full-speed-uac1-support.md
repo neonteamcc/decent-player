@@ -56,12 +56,18 @@ own handling:
   class-specific: UAC1 activates the alt FIRST, then sets the rate on the
   endpoint (Linux `set_sample_rate_v1` ordering), with an echo readback
   and an advertised-rate check.
-- [ ] Native engine: runtime stream geometry (packets/sec 1000 vs 8000,
-  packets/URB, ring depth, URB buffer size from wMaxPacketSize), feedback
-  decode by payload length (3 B Q10.14 / 4 B Q16.16) with ALSA-style
-  freqshift auto-detect, no-feedback nominal pacing, wMaxPacketSize clamp.
-- [ ] Bit-depth reduction (dithered 24/32 → 16) for devices whose best
-  format is shallower than the source.
+- [x] Native engine: runtime stream geometry — `packetsPerSecond`
+  (1000 FS / 8000 HS), `packetsPerUrb` (2 FS / 8 HS), `numUrbs`
+  (40 FS / 80 HS, same ~80 ms pipeline), passed from Kotlin through
+  `nativeUsbAudioCreate`; feedback decode by payload length (3 B Q10.14 /
+  4 B Q16.16) with ALSA-style freqshift auto-detect and re-arm; feedback
+  URB length = the sync endpoint's wMaxPacketSize; no-feedback nominal
+  pacing (adaptive/sync/None devices); per-packet wMaxPacketSize clamp
+  (the kernel rejects oversize iso packets with EMSGSIZE).
+- [x] Bit-depth reduction: TPDF-dithered `ditherInt24ToInt16` /
+  `ditherInt32ToInt16` wired into both `nativeUsbAudioWriteRaw` and the
+  native FLAC engine's conversion matrix (24-bit FLAC on a 16-bit device).
+- [ ] In-family integer decimation (192k→96k ÷2 etc.) — see Rate policy.
 - [ ] Validation: full-speed UAC1 (FiiO BTR13-class) and full-speed UAC2
   (Apple dongle-class) hardware, xHCI ftrace packet-size verification,
   high-speed UAC2 regression (existing devices must be byte-identical).

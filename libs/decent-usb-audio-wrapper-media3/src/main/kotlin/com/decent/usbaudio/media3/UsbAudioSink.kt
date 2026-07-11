@@ -523,7 +523,9 @@ class UsbAudioSink(
             sampleRate = sampleRate,
             channelCount = channelCount,
             bitDepth = bitDepth,
-            maxPacketSize = deviceInfo.maxPacketSize
+            maxPacketSize = deviceInfo.maxPacketSize,
+            packetsPerSecond = deviceInfo.busSpeed.packetsPerSecond,
+            feedbackMaxPacket = feedbackMaxPacket(deviceInfo, altSetting)
         )
 
         if (!stream.isReady) {
@@ -565,7 +567,9 @@ class UsbAudioSink(
                 sampleRate = sampleRate,
                 channelCount = channelCount,
                 bitDepth = bitDepth,
-                maxPacketSize = deviceInfo.maxPacketSize
+                maxPacketSize = deviceInfo.maxPacketSize,
+                packetsPerSecond = deviceInfo.busSpeed.packetsPerSecond,
+                feedbackMaxPacket = feedbackMaxPacket(deviceInfo, altSetting)
             )
             if (!stream.isReady) {
                 Log.e(TAG, "USB stream recreation failed after reopen")
@@ -689,6 +693,14 @@ class UsbAudioSink(
         usbStreamingThread = UsbStreamingThread(stream).also { it.start() }
         Log.i(TAG, "Using ExoPlayer pipeline (non-FLAC or engine failed)")
     }
+
+    /** wMaxPacketSize of the alt setting's feedback endpoint, or 0. */
+    private fun feedbackMaxPacket(
+        info: com.decent.usbaudio.UsbAudioDeviceInfo,
+        altSetting: Int
+    ): Int = info.layout?.streamingAlts
+        ?.firstOrNull { it.altSetting == altSetting }
+        ?.feedback?.maxPacketSize ?: 0
 
     // ── USB stream release ──────────────────────────────────────────
 

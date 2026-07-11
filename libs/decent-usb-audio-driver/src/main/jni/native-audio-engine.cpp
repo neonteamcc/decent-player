@@ -332,6 +332,12 @@ static void *decodeThreadFunc(void *arg) {
             padInt24ToInt32(engine->pcmBuffer, engine->convertBuffer, totalSamples);
             usbData = engine->convertBuffer;
             usbBytes = totalSamples * 4;
+        } else if (engine->bitsPerSample == 24 && engine->dacBitDepth == 16) {
+            // 16-bit-only device playing 24-bit FLAC: TPDF-dithered reduction
+            ditherInt24ToInt16(engine->pcmBuffer, engine->convertBuffer, totalSamples,
+                               &engine->usbCtx->ditherState);
+            usbData = engine->convertBuffer;
+            usbBytes = totalSamples * 2;
         } else {
             LOGE("Unsupported bit-depth conversion: %d → %d",
                  engine->bitsPerSample, engine->dacBitDepth);
