@@ -1,0 +1,97 @@
+Windows PnP registry enumeration for FiiO BTR13 (from the device owner).
+Corroborates the Thesycon dump: usbccgp composite; MI_00 = audio function
+bound to usbaudio.sys (the Windows UAC1 class driver — usbaudio2.sys would
+indicate UAC2); MI_02/MI_03 = HID (HidUsb). CompatibleIDs show
+Class_01&SubClass_01&Prot_00 (AudioControl, protocol 0 = UAC1).
+
+Device Hardware ID Key: VID_0A12&PID_4007
+==================================================
+Instance: ABCDEF0123456789
+  DeviceDesc: @usb.inf,%usb\composite.devicedesc%;USB Composite Device
+  LocationInformation: Port_#0001.Hub_#0005
+  Capabilities: 144
+  Address: 1
+  ContainerID: {91188ac7-7d4d-11f1-a49c-001a7dda7113}
+  HardwareID: ['USB\\VID_0A12&PID_4007&REV_1970', 'USB\\VID_0A12&PID_4007']
+  CompatibleIDs: ['USB\\DevClass_00&SubClass_00&Prot_00', 'USB\\DevClass_00&SubClass_00', 'USB\\DevClass_00', 'USB\\COMPOSITE']
+  ClassGUID: {36fc9e60-c465-11cf-8056-444553540000}
+  ParentIdPrefix: 8&326e1924&0
+  Service: usbccgp
+  Driver: {36fc9e60-c465-11cf-8056-444553540000}\0012
+  Mfg: @usb.inf,%generic.mfg%;(Standard USB Host Controller)
+  ConfigFlags: 0
+  [Device Parameters]
+    EnumerationRetryCount: 0
+    SymbolicName: \??\USB#VID_0A12&PID_4007#ABCDEF0123456789#{a5dcbf10-6530-11d2-901f-00c04fb951ed}
+Device Hardware ID Key: VID_0A12&PID_4007&MI_00
+==================================================
+Instance: 8&326e1924&0&0000
+  DeviceDesc: @wdma_usb.inf,%usb\class_01.devicedesc%;USB Audio Device
+  LocationInformation: 0030.0000.0003.002.001.000.000.000.000
+  Capabilities: 160
+  Address: 1
+  ContainerID: {91188ac7-7d4d-11f1-a49c-001a7dda7113}
+  HardwareID: ['USB\\VID_0A12&PID_4007&REV_1970&MI_00', 'USB\\VID_0A12&PID_4007&MI_00']
+  CompatibleIDs: ['USB\\Class_01&SubClass_01&Prot_00', 'USB\\Class_01&SubClass_01', 'USB\\Class_01']
+  ClassGUID: {4d36e96c-e325-11ce-bfc1-08002be10318}
+  FriendlyName: FIIO BTR13
+  Driver: {4d36e96c-e325-11ce-bfc1-08002be10318}\0006
+  Service: usbaudio
+  Mfg: @wdma_usb.inf,%mfgname%;Microsoft
+  ConfigFlags: 0
+  [Device Parameters]
+    ExtPropDescSemaphore: 1
+    RevisionId: 6512
+    VendorRevision: 0
+Device Hardware ID Key: VID_0A12&PID_4007&MI_02
+==================================================
+Instance: 8&326e1924&0&0002
+  DeviceDesc: @input.inf,%hid.devicedesc%;USB Input Device
+  LocationInformation: 0030.0000.0003.002.001.000.000.000.000
+  Capabilities: 128
+  Address: 3
+  ContainerID: {91188ac7-7d4d-11f1-a49c-001a7dda7113}
+  HardwareID: ['USB\\VID_0A12&PID_4007&REV_1970&MI_02', 'USB\\VID_0A12&PID_4007&MI_02']
+  CompatibleIDs: ['USB\\Class_03&SubClass_00&Prot_00', 'USB\\Class_03&SubClass_00', 'USB\\Class_03']
+  ClassGUID: {745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+  ParentIdPrefix: 9&205eb64f&0
+  Service: HidUsb
+  Driver: {745a17a0-74d3-11d0-b6fe-00a0c90f57da}\0023
+  Mfg: @input.inf,%stdmfg%;(Standard system devices)
+  ConfigFlags: 0
+  [Device Parameters]
+    AllowIdleIrpInD3: 1
+    DeviceResetNotificationEnabled: 1
+    EnhancedPowerManagementEnabled: 1
+    LegacyTouchScaling: 0
+    RevisionId: 6512
+    SelectiveSuspendEnabled: b'\x00'
+    VendorRevision: 0
+    WriteReportExSupported: 1
+    ExtPropDescSemaphore: 1
+Device Hardware ID Key: VID_0A12&PID_4007&MI_03
+==================================================
+Instance: 8&326e1924&0&0003
+  DeviceDesc: @input.inf,%hid.devicedesc%;USB Input Device
+  LocationInformation: 0030.0000.0003.002.001.000.000.000.000
+  Capabilities: 128
+  Address: 4
+  ContainerID: {91188ac7-7d4d-11f1-a49c-001a7dda7113}
+  HardwareID: ['USB\\VID_0A12&PID_4007&REV_1970&MI_03', 'USB\\VID_0A12&PID_4007&MI_03']
+  CompatibleIDs: ['USB\\Class_03&SubClass_00&Prot_00', 'USB\\Class_03&SubClass_00', 'USB\\Class_03']
+  ClassGUID: {745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+  ParentIdPrefix: 9&38224294&0
+  Service: HidUsb
+  Driver: {745a17a0-74d3-11d0-b6fe-00a0c90f57da}\0024
+  Mfg: @input.inf,%stdmfg%;(Standard system devices)
+  ConfigFlags: 0
+  [Device Parameters]
+    AllowIdleIrpInD3: 1
+    DeviceResetNotificationEnabled: 1
+    EnhancedPowerManagementEnabled: 1
+    LegacyTouchScaling: 0
+    RevisionId: 6512
+    SelectiveSuspendEnabled: b'\x00'
+    VendorRevision: 0
+    WriteReportExSupported: 1
+    ExtPropDescSemaphore: 1
