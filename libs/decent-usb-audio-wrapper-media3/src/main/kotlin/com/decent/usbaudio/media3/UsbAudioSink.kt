@@ -21,6 +21,7 @@ import androidx.media3.exoplayer.audio.ForwardingAudioSink
 import com.decent.usbaudio.NativeAudioEngine
 import com.decent.usbaudio.UsbAudioDevice
 import com.decent.usbaudio.UsbAudioStream
+import com.decent.usbaudio.descriptor.UacVersion
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -531,17 +532,22 @@ class UsbAudioSink(
             return
         }
 
-        // ─── xHCI-verified transition sequence (from USB protocol analysis) ───
+        // ─── Class-specific transition sequences ───
         //
-        // 1. setAlt(0)       → xHCI Configure Endpoint (FREE old rings)
-        // 2. SET_CUR          → write new sample rate to Clock Source
-        // 3. GET_CUR          → verify clock accepted (CLOCK_VALID_CONTROL)
-        // 4. setAlt(0) AGAIN  → defensive reset after clock change
-        // 5. setAlt(N)        → xHCI Configure Endpoint (ALLOC new rings)
-        // 6. wait ~47ms       → DAC PLL lock time
-        // 7. start            → submit URBs
+        // UAC2 (xHCI-verified, from USB protocol analysis):
+        //   setAlt(0) → SET_CUR(clock) → CLOCK_VALID → setAlt(0) → setAlt(N)
+        //   → ~50 ms PLL settle → start. The clock is programmed BEFORE the
+        //   streaming alt goes live.
+        //
+        // UAC1 (audio10 §5.2.3.2 + Linux set_sample_rate_v1 ordering):
+        //   setAlt(0) → setAlt(N) → SET_CUR(endpoint) → GET_CUR echo
+        //   → ~50 ms settle → start. The rate is a property of the ENDPOINT,
+        //   which only exists while the non-zero alt is selected — so the
+        //   alt is activated FIRST, and the rate must be re-sent after every
+        //   alt change ("Some UAC1 devices need the host interface to be set
+        //   up before parameter setups" — sound/usb/endpoint.c).
 
-        // Step 1: setAlt(0) — FREE old ISO rings
+        // Step 1 (both): setAlt(0) — FREE old ISO rings
         if (!usbAudioDevice.setAltSetting(0)) {
             Log.w(TAG, "setAlt(0) failed — stale fd, reopening device...")
             usbAudioDevice.closeDevice()
@@ -570,22 +576,46 @@ class UsbAudioSink(
         }
         Log.i(TAG, "Step 1: setAlt(0) — old ISO ring freed")
 
-        // Step 2: SET_CUR — write new sample rate
-        usbAudioDevice.setSampleRate(sampleRate)
+        if (deviceInfo.uacVersion == UacVersion.UAC1) {
+            val layoutAlt = deviceInfo.layout?.streamingAlts
+                ?.firstOrNull { it.altSetting == altSetting }
+            if (layoutAlt != null && !layoutAlt.supportsRate(sampleRate)) {
+                Log.w(TAG, "UAC1 alt $altSetting does not advertise $sampleRate Hz " +
+                        "(supported: ${layoutAlt.sampleRates}) — playback will be " +
+                        "wrong until in-family decimation lands (docs/driver/14)")
+            }
 
-        // Step 3: GET_CUR(CLOCK_VALID_CONTROL) — verify clock is locked
-        val clockValid = usbAudioDevice.readClockValid()
-        Log.i(TAG, "Step 2-3: SET_CUR=$sampleRate, CLOCK_VALID=$clockValid")
+            // Step 2 (UAC1): activate the streaming alt — the endpoint (and
+            // its SAMPLING_FREQ control) exists only in the non-zero alt.
+            val altResult = usbAudioDevice.setAltSetting(altSetting)
+            Log.i(TAG, "Step 2 (UAC1): setAlt($altSetting): $altResult")
 
-        // Step 4: setAlt(0) AGAIN — defensive reset after clock change
-        usbAudioDevice.setAltSetting(0)
-        Log.i(TAG, "Step 4: setAlt(0) again — defensive reset")
+            // Step 3 (UAC1): SET_CUR to the endpoint, then echo-verify.
+            val rateSet = usbAudioDevice.setSampleRate(sampleRate)
+            val echo = usbAudioDevice.readSampleRate()
+            Log.i(TAG, "Step 3 (UAC1): SET_CUR=$sampleRate set=$rateSet echo=$echo")
+            if (echo > 0 && echo != sampleRate) {
+                Log.w(TAG, "UAC1 rate echo mismatch: asked $sampleRate got $echo " +
+                        "— device may resample or firmware rounds the readback")
+            }
+        } else {
+            // Step 2 (UAC2): SET_CUR — write new sample rate to the clock
+            usbAudioDevice.setSampleRate(sampleRate)
 
-        // Step 5: setAlt(N) — ALLOC new ISO rings
-        val altResult = usbAudioDevice.setAltSetting(altSetting)
-        Log.i(TAG, "Step 5: setAlt($altSetting): $altResult — new ISO ring allocated")
+            // Step 3 (UAC2): GET_CUR(CLOCK_VALID_CONTROL) — verify clock lock
+            val clockValid = usbAudioDevice.readClockValid()
+            Log.i(TAG, "Step 2-3: SET_CUR=$sampleRate, CLOCK_VALID=$clockValid")
 
-        // Step 6: wait ~47ms — DAC PLL lock time
+            // Step 4 (UAC2): setAlt(0) AGAIN — defensive reset after clock change
+            usbAudioDevice.setAltSetting(0)
+            Log.i(TAG, "Step 4: setAlt(0) again — defensive reset")
+
+            // Step 5 (UAC2): setAlt(N) — ALLOC new ISO rings
+            val altResult = usbAudioDevice.setAltSetting(altSetting)
+            Log.i(TAG, "Step 5: setAlt($altSetting): $altResult — new ISO ring allocated")
+        }
+
+        // Final step (both): wait ~50ms — DAC PLL/settle time
         Thread.sleep(50)
 
         if (!stream.start()) {

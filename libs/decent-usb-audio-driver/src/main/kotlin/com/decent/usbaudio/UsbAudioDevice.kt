@@ -12,6 +12,11 @@ import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
+import com.decent.usbaudio.descriptor.UacControl
+import com.decent.usbaudio.descriptor.UacVersion
+import com.decent.usbaudio.descriptor.UsbAudioDescriptorParser
+import com.decent.usbaudio.descriptor.UsbAudioDeviceLayout
+import com.decent.usbaudio.descriptor.UsbBusSpeed
 
 
 /**
@@ -259,9 +264,45 @@ class UsbAudioDevice private constructor(private val context: Context) {
         connection = conn
         currentDevice = device
 
+        // Parse the full descriptor layout: UAC version, alt settings with
+        // formats/rates, endpoints, sync types. This is the class-agnostic
+        // source of truth; the legacy UAC2-offset parsers below remain the
+        // fallback when parsing fails.
+        val layout = try {
+            conn.rawDescriptors?.let { UsbAudioDescriptorParser.parse(it) }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Descriptor layout parse failed", t)
+            null
+        }
+        val uacVersion = layout?.uacVersion ?: UacVersion.UAC2
+        val busSpeed = detectBusSpeed(fd, conn, layout)
+        Log.i(TAG, "Detected: uacVersion=$uacVersion busSpeed=$busSpeed " +
+                "alts=${layout?.streamingAlts?.map { "${it.altSetting}:${it.bitResolution}bit" }}")
+
         // Auto-detect Clock Source ID and best alt setting from USB descriptors
-        val clockSourceId = parseClockSourceId(conn)
-        val (bestAlt, bestBits) = parseBestAltSetting(conn)
+        val clockSourceId: Int
+        val bestAlt: Int
+        val bestBits: Int
+        var bestRates: List<Int> = emptyList()
+        if (uacVersion == UacVersion.UAC1 && layout != null && layout.hasPlayback) {
+            // UAC1: rates and formats come from the parsed Format Type I
+            // descriptors — the legacy parser reads UAC2 offsets and would
+            // see garbage here.
+            clockSourceId = -1
+            val best = layout.streamingAlts.maxByOrNull { it.bitResolution }!!
+            bestAlt = best.altSetting
+            bestBits = best.bitResolution
+            bestRates = best.sampleRates
+            parsedAltSettings = layout.streamingAlts.map { Pair(it.altSetting, it.bitResolution) }
+            Log.i(TAG, "UAC1 layout: bestAlt=$bestAlt bits=$bestBits rates=$bestRates " +
+                    "sync=${best.syncType} sampleRateControl=${best.hasSampleRateControl} " +
+                    "maxPacketsOnly=${best.maxPacketsOnly}")
+        } else {
+            clockSourceId = parseClockSourceId(conn)
+            val (alt, bits) = parseBestAltSetting(conn)
+            bestAlt = alt
+            bestBits = bits
+        }
         Log.i(TAG, "Auto-detected: clockSourceId=0x${clockSourceId.toString(16)}, " +
                 "bestAlt=$bestAlt, bestBits=$bestBits")
 
@@ -276,10 +317,48 @@ class UsbAudioDevice private constructor(private val context: Context) {
                 altSettingCount = altSettingCount,
                 clockSourceId = clockSourceId,
                 bestAltSetting = bestAlt,
-                bestBitDepth = bestBits
+                bestBitDepth = bestBits,
+                uacVersion = uacVersion,
+                busSpeed = busSpeed,
+                sampleRates = bestRates,
+                layout = layout,
         )
         cachedDeviceInfo = info
         return info
+    }
+
+    /**
+     * Determine the operating bus speed: USBDEVFS_GET_SPEED first (kernel
+     * ≥ 4.13 — effectively all Android 11+ devices), then descriptor
+     * invariants, then a class-based default. bcdUSB is deliberately NOT
+     * consulted: full-speed devices routinely report 0x0200.
+     */
+    private fun detectBusSpeed(
+            fd: Int,
+            conn: UsbDeviceConnection,
+            layout: UsbAudioDeviceLayout?,
+    ): UsbBusSpeed {
+        val ioctlResult = try {
+            UsbAudioStream.nativeGetBusSpeed(fd)
+        } catch (t: Throwable) {
+            Log.w(TAG, "nativeGetBusSpeed threw", t)
+            -1
+        }
+        if (ioctlResult > 0) {
+            val speed = UsbBusSpeed.fromIoctl(ioctlResult)
+            if (speed != UsbBusSpeed.UNKNOWN) return speed
+        }
+        val raw = conn.rawDescriptors
+        if (raw != null && UsbAudioDescriptorParser.definitelyHighSpeed(raw)) {
+            Log.i(TAG, "detectBusSpeed: GET_SPEED unavailable, descriptor invariants say HIGH")
+            return UsbBusSpeed.HIGH
+        }
+        // UAC1 devices are, in practice, always full-speed; for UAC2 keep
+        // the legacy high-speed assumption rather than break working DACs.
+        val fallback = if (layout?.uacVersion == UacVersion.UAC1) UsbBusSpeed.FULL else UsbBusSpeed.HIGH
+        Log.w(TAG, "detectBusSpeed: GET_SPEED unavailable (ret=$ioctlResult), " +
+                "falling back to $fallback by class")
+        return fallback
     }
 
     /**
@@ -484,6 +563,30 @@ class UsbAudioDevice private constructor(private val context: Context) {
     fun setSampleRate(sampleRateHz: Int): Boolean {
         val conn = connection ?: return false
 
+        // UAC1: the rate is a property of the ISO data ENDPOINT, set with a
+        // class/endpoint SET_CUR carrying a 3-byte rate (audio10 §5.2.3.2).
+        // Only valid while a non-zero alt setting is active, and must be
+        // re-sent after every alt change — the wrapper's transition sequence
+        // handles the ordering.
+        val info = cachedDeviceInfo
+        if (info?.uacVersion == UacVersion.UAC1) {
+            val alt = info.layout?.streamingAlts?.firstOrNull {
+                it.endpointAddress == info.endpointOutAddress
+            }
+            if (alt != null && !alt.hasSampleRateControl) {
+                Log.i(TAG, "setSampleRate($sampleRateHz): UAC1 endpoint has no " +
+                        "SamplingFrequency control — device is fixed/auto, skipping")
+                return true
+            }
+            val req = UacControl.uac1SetSampleRate(info.endpointOutAddress, sampleRateHz)
+            val ret = conn.controlTransfer(
+                    req.requestType, req.request, req.value, req.index,
+                    req.data, req.data.size, 1000)
+            Log.i(TAG, "setSampleRate($sampleRateHz Hz) UAC1 ep=0x" +
+                    info.endpointOutAddress.toString(16) + ": ret=$ret")
+            return ret >= 0
+        }
+
         val data = ByteArray(4)
         data[0] = (sampleRateHz and 0xFF).toByte()
         data[1] = ((sampleRateHz shr 8) and 0xFF).toByte()
@@ -528,6 +631,25 @@ class UsbAudioDevice private constructor(private val context: Context) {
      */
     fun readSampleRate(): Int {
         val conn = connection ?: return -1
+
+        // UAC1: GET_CUR from the data endpoint, 3-byte reply. Some firmwares
+        // don't implement the readback — treat failure as "unknown", not
+        // as an error (Linux does the same).
+        val info = cachedDeviceInfo
+        if (info?.uacVersion == UacVersion.UAC1) {
+            val req = UacControl.uac1GetSampleRate(info.endpointOutAddress)
+            val ret = conn.controlTransfer(
+                    req.requestType, req.request, req.value, req.index,
+                    req.data, req.data.size, 1000)
+            if (ret >= 3) {
+                val rate = UacControl.decodeRate(req.data, ret)
+                Log.i(TAG, "readSampleRate UAC1: $rate Hz")
+                return rate
+            }
+            Log.w(TAG, "readSampleRate UAC1: GET_CUR failed (ret=$ret) — readback unsupported?")
+            return -1
+        }
+
         val data = ByteArray(4)
 
         val detectedId = cachedDeviceInfo?.clockSourceId ?: -1
@@ -568,6 +690,12 @@ class UsbAudioDevice private constructor(private val context: Context) {
      */
     fun readClockValid(): Boolean {
         val conn = connection ?: return false
+
+        // UAC1 has no clock entities and no CLOCK_VALID control — the DAC's
+        // PLL state is not observable. Report valid so transition sequences
+        // proceed.
+        if (cachedDeviceInfo?.uacVersion == UacVersion.UAC1) return true
+
         val data = ByteArray(1)
 
         val detectedId = cachedDeviceInfo?.clockSourceId ?: -1

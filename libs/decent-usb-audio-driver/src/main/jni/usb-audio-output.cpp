@@ -28,6 +28,13 @@
 #define USBDEVFS_URB_ISO_ASAP 0x02
 #endif
 
+// Operating bus speed query (enum usb_device_speed). In the kernel since
+// 4.13; on older kernels the ioctl fails with ENOTTY and the Kotlin layer
+// falls back to descriptor heuristics.
+#ifndef USBDEVFS_GET_SPEED
+#define USBDEVFS_GET_SPEED _IO('U', 31)
+#endif
+
 #define TAG "UsbAudioOutput"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  TAG, __VA_ARGS__)
@@ -646,6 +653,19 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbReset(
     struct usbdevfs_setinterface si = {}; si.interface = 1; si.altsetting = 0;
     ioctl(fd, USBDEVFS_SETINTERFACE, &si);
     return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_decent_usbaudio_UsbAudioStream_nativeGetBusSpeed(
+        JNIEnv *, jclass, jint fd) {
+    int ret = ioctl(fd, USBDEVFS_GET_SPEED);
+    if (ret < 0) {
+        LOGW("USBDEVFS_GET_SPEED fd=%d failed errno=%d (%s) — kernel < 4.13?",
+             fd, errno, strerror(errno));
+        return -errno;
+    }
+    LOGI("USBDEVFS_GET_SPEED fd=%d -> %d (1=low 2=full 3=high 5=super)", fd, ret);
+    return ret;
 }
 
 } // extern "C" — pause for non-JNI functions used by native-audio-engine

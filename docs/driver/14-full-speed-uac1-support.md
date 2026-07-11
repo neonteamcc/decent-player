@@ -44,10 +44,18 @@ own handling:
   hint. JVM unit tests run against byte-exact reconstructions of captured
   dumps (`docs/hardware/fixtures/`), including the CSR/Qualcomm quirk of
   emitting EP_GENERAL *before* the standard endpoint descriptor.
-- [ ] Bus speed detection: `USBDEVFS_GET_SPEED` ioctl (kernel ≥ 4.13) with
-  descriptor-hint fallback.
-- [ ] UAC1 control requests (endpoint SET_CUR/GET_CUR sample rate) and the
-  UAC1 alt→rate transition sequence in the wrapper.
+- [x] Bus speed detection: `UsbAudioStream.nativeGetBusSpeed()`
+  (USBDEVFS_GET_SPEED, kernel ≥ 4.13) with descriptor-invariant fallback
+  and a class-based default (`UsbAudioDevice.detectBusSpeed`). bcdUSB is
+  deliberately ignored — full-speed devices routinely report 0x0200.
+- [x] UAC1 control requests: `UacControl` encodes endpoint
+  SET_CUR/GET_CUR(SAMPLING_FREQ) (0x22/0xA2, 3-byte rates) and the UAC2
+  clock-entity equivalents, wire-format unit-tested;
+  `UsbAudioDevice.setSampleRate/readSampleRate/readClockValid` branch on
+  the detected class. The wrapper's transition sequence is now
+  class-specific: UAC1 activates the alt FIRST, then sets the rate on the
+  endpoint (Linux `set_sample_rate_v1` ordering), with an echo readback
+  and an advertised-rate check.
 - [ ] Native engine: runtime stream geometry (packets/sec 1000 vs 8000,
   packets/URB, ring depth, URB buffer size from wMaxPacketSize), feedback
   decode by payload length (3 B Q10.14 / 4 B Q16.16) with ALSA-style
