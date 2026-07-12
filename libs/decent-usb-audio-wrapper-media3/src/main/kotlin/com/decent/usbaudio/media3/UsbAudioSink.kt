@@ -678,6 +678,11 @@ class UsbAudioSink(
                 val created = engine.createFromFd(fd.fd, stream.nativeHandle)
                 fd.close()
                 if (created && engine.start()) {
+                    // Gate output IMMEDIATELY: start() begins pumping URBs from
+                    // position 0, and even the rate check below is long enough
+                    // to be audible on a paused engage. handleBuffer seeks to
+                    // the real position and resumes — play-state gated.
+                    engine.pause()
                     // Verify FLAC sample rate matches USB stream — prevents distortion
                     // when ExoPlayer's queue and onMediaItemTransition disagree about
                     // which track is playing (e.g., cross-album Recently Played lists).
@@ -687,9 +692,8 @@ class UsbAudioSink(
                         engine.stop()
                         engine.destroy()
                     } else {
-                        // Start paused — will resume in handleBuffer after capturing
-                        // the correct seek position from ExoPlayer's presentationTimeUs.
-                        engine.pause()
+                        // Already paused above — resumes in handleBuffer after
+                        // capturing the seek position from presentationTimeUs.
                         nativeEngine = engine
                         isNativeEngineActive = true
                         engineNeedsInitialSeek = true
@@ -706,9 +710,16 @@ class UsbAudioSink(
             engine.destroy()
         }
 
-        // Fallback: ExoPlayer pipeline via streaming thread
-        usbStreamingThread = UsbStreamingThread(stream).also { it.start() }
-        Log.i(TAG, "Using ExoPlayer pipeline (non-FLAC or engine failed)")
+        // Fallback: ExoPlayer pipeline via streaming thread. Born matching the
+        // sink's transport state: ExoPlayer primes the sink while PAUSED
+        // (prepare() writes buffers ahead of play()), and a thread born
+        // streaming played that primed audio out the DAC on every paused
+        // engage — with a silent UI. play()/pause() drive it from here.
+        usbStreamingThread = UsbStreamingThread(stream).also {
+            if (!isPlaying) it.pauseStreaming()
+            it.start()
+        }
+        Log.i(TAG, "Using ExoPlayer pipeline (non-FLAC or engine failed, paused=${!isPlaying})")
     }
 
     /** USB (output) rate of the active stream; differs from
