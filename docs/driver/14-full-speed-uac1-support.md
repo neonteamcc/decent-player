@@ -77,6 +77,16 @@ own handling:
   checked), runs the DAC at the mapped rate, and tracks position in the
   output domain. Passthrough (`decimationFactor = 1`) leaves every legacy
   path byte-identical.
+- [x] Cross-family rational resampling: `resampler.cpp` — polyphase
+  Kaiser windowed-sinc (100 dB stopband, passband flat to 20 kHz for
+  44.1↔48 pairs), streaming L/M with phase carry. Host-verified:
+  passband +0.0000 dB, alias rejection −107…−119 dB, exact frame
+  counts on odd chunks. Covers 44.1-family tracks on 48-only devices
+  (Apple dongle class) and pins MaxPacketsOnly firmwares (BTR3 class)
+  to the one rate where nominal packet == wMaxPacketSize.
+- [x] UAC2 rate discovery: RANGE(SAM_FREQ) on the clock source at open
+  (`UacControl.uac2GetSampleRateRange` + parser, unit-tested); the rate
+  picker consults the device list instead of staying permissive.
 - [x] **Validated on hardware: FiiO BTR13** (full-speed × UAC1 ×
   no-feedback, 16-bit) — real-device playback confirmed clean by the
   device owner (2026-07-11), CI-built AARs, release APK.
@@ -97,17 +107,6 @@ Contributions of descriptor dumps for full-speed devices are very welcome
 — see `docs/hardware/fixtures/README.md` for the format and
 [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
-- [x] Cross-family rational resampling: `resampler.cpp` — polyphase
-  Kaiser windowed-sinc (100 dB stopband, passband flat to 20 kHz for
-  44.1↔48 pairs), streaming L/M with phase carry. Host-verified:
-  passband +0.0000 dB, alias rejection −107…−119 dB, exact frame
-  counts on odd chunks. Covers 44.1-family tracks on 48-only devices
-  (Apple dongle class) and pins MaxPacketsOnly firmwares (BTR3 class)
-  to the one rate where nominal packet == wMaxPacketSize.
-- [x] UAC2 rate discovery: RANGE(SAM_FREQ) on the clock source at open
-  (`UacControl.uac2GetSampleRateRange` + parser, unit-tested); the rate
-  picker consults the device list instead of staying permissive.
-
 ## Rate policy (decided)
 
 Tracks whose sample rate exceeds the device's ceiling still play:
@@ -115,7 +114,8 @@ in-family integer decimation to the highest supported rate
 (192k → 96k ÷2, 384k → 96k ÷4, 176.4k → 88.2k ÷2) via a half-band FIR —
 deterministic, cheap, no asynchronous SRC. Combined with dithered
 bit-depth reduction when needed (192/24 → 96/16 on a 16-bit/96k device).
-Cross-family fractional SRC (44.1-family source onto a 48-only device)
-is out of scope until a real device needs it. The engagement badge
-reports the honest mode; bit-perfect claims are made only when the
-stream is untouched.
+Cross-family sources (44.1-family onto a 48-only device, MaxPacketsOnly
+firmwares pinned to one rate) go through the rational polyphase
+resampler — preferring the smallest supported rate above the track
+(content-preserving upsample), else the largest below. Bit-perfect
+claims apply only when the stream is untouched.
