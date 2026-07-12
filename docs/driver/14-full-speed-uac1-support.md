@@ -77,9 +77,14 @@ own handling:
   checked), runs the DAC at the mapped rate, and tracks position in the
   output domain. Passthrough (`decimationFactor = 1`) leaves every legacy
   path byte-identical.
-- [ ] Validation: full-speed UAC1 (FiiO BTR13-class) and full-speed UAC2
-  (Apple dongle-class) hardware, xHCI ftrace packet-size verification,
-  high-speed UAC2 regression (existing devices must be byte-identical).
+- [x] **Validated on hardware: FiiO BTR13** (full-speed × UAC1 ×
+  no-feedback, 16-bit) — real-device playback confirmed clean by the
+  device owner (2026-07-11), CI-built AARs, release APK.
+- [ ] Remaining validation: full-speed UAC2 hardware (Apple dongle-class —
+  no device on hand; logic covered by unit tests on its descriptor dump),
+  xHCI ftrace packet-size verification on a rooted device, long-run
+  (30+ min) adaptive drift soak, high-speed UAC2 regression pass
+  (KA17-class — expected byte-identical, worth one explicit listen).
 
 Reference behavior throughout is Linux `snd-usb-audio`
 (`sound/usb/endpoint.c`, `clock.c`, `format.c`): nominal-rate fractional
