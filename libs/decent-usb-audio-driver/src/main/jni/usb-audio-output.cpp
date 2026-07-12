@@ -490,6 +490,7 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioCreate(
     }
     ctx->feedbackShift = INT32_MIN;
     ctx->ditherState = 0x6D2B79F5u;
+    ctx->softGain.store(1.0f);
     // Feedback packet length MUST equal the endpoint's wMaxPacketSize:
     // longer fails SUBMITURB (EMSGSIZE), shorter risks packet overflow.
     // Unknown (<= 0) → spec default by speed: 3 bytes at FS, 4 at HS.
@@ -668,6 +669,7 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioWrite(
 
         int outBytes = resampleAndConvert(ctx, ctx->canonicalBuffer, totalFrames);
         if (outBytes > 0) {
+            applySoftGain(ctx, ctx->transferBuffer, outBytes);
             submitPcmToUrbs(ctx, ctx->transferBuffer, outBytes);
             ctx->framesWritten += outBytes / ctx->bytesPerFrame;
         }
@@ -683,6 +685,7 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioWrite(
     env->ReleaseFloatArrayElements(pcm, f, JNI_ABORT);
 
     // Submit converted PCM to USB pipeline (shared with raw path)
+    applySoftGain(ctx, ctx->transferBuffer, totalBytes);
     submitPcmToUrbs(ctx, ctx->transferBuffer, totalBytes);
 
     ctx->framesWritten += totalFrames;
@@ -806,6 +809,16 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeGetBusSpeed(
     return ret;
 }
 
+JNIEXPORT void JNICALL
+Java_com_decent_usbaudio_UsbAudioStream_nativeSetGain(
+        JNIEnv *, jobject, jlong h, jfloat gain) {
+    auto *ctx = reinterpret_cast<UsbAudioContext *>(h);
+    if (!ctx) return;
+    float g = gain < 0.0f ? 0.0f : (gain > 1.0f ? 1.0f : gain);
+    ctx->softGain.store(g, std::memory_order_relaxed);
+    LOGI("SetGain: %.4f", g);
+}
+
 } // extern "C" — pause for non-JNI functions used by native-audio-engine
 
 // ── Integer padding (lossless, zero float) ──────────────────────────
@@ -891,6 +904,59 @@ void packInt32ToInt24(const uint8_t *src, uint8_t *dst, int numSamples) {
         dst[i*3] = v & 0xFF;
         dst[i*3+1] = (v >> 8) & 0xFF;
         dst[i*3+2] = (v >> 16) & 0xFF;
+    }
+}
+
+// ── Software volume (fallback when no Feature Unit volume exists) ──
+
+void applySoftGain(UsbAudioContext *ctx, uint8_t *pcm, int totalBytes) {
+    const float gain = ctx->softGain.load(std::memory_order_relaxed);
+    if (gain >= 0.99999f) return; // exactly-1.0 stays bit-perfect
+    const double g = gain < 0.0f ? 0.0 : (double)gain;
+    switch (ctx->bitDepth) {
+        case 16: {
+            auto *s = reinterpret_cast<int16_t *>(pcm);
+            const int n = totalBytes / 2;
+            for (int i = 0; i < n; i++) {
+                // TPDF dither at the target LSB: scaling down truncates
+                // real signal bits, undithered that correlates with the
+                // program material.
+                int32_t noise = (int32_t)(lcgNext(&ctx->ditherState) & 0xFF) +
+                                (int32_t)(lcgNext(&ctx->ditherState) & 0xFF) - 255;
+                double v = (double)s[i] * g + noise / 256.0;
+                int32_t r = (int32_t)llrint(v);
+                if (r > 32767) r = 32767;
+                if (r < -32768) r = -32768;
+                s[i] = (int16_t)r;
+            }
+            break;
+        }
+        case 24: {
+            const int n = totalBytes / 3;
+            for (int i = 0; i < n; i++) {
+                int32_t v = pcm[i*3] | (pcm[i*3+1] << 8) | (pcm[i*3+2] << 16);
+                if (v & 0x800000) v |= 0xFF000000;
+                int64_t r = llrint((double)v * g);
+                if (r > 8388607) r = 8388607;
+                if (r < -8388608) r = -8388608;
+                pcm[i*3] = (uint8_t)(r & 0xFF);
+                pcm[i*3+1] = (uint8_t)((r >> 8) & 0xFF);
+                pcm[i*3+2] = (uint8_t)((r >> 16) & 0xFF);
+            }
+            break;
+        }
+        case 32: {
+            auto *s = reinterpret_cast<int32_t *>(pcm);
+            const int n = totalBytes / 4;
+            for (int i = 0; i < n; i++) {
+                double v = (double)s[i] * g;
+                if (v > 2147483647.0) v = 2147483647.0;
+                if (v < -2147483648.0) v = -2147483648.0;
+                s[i] = (int32_t)llrint(v);
+            }
+            break;
+        }
+        default: break;
     }
 }
 
@@ -1122,6 +1188,7 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioWriteRaw(
 
         int outBytes = resampleAndConvert(ctx, ctx->canonicalBuffer, totalFrames);
         if (outBytes > 0) {
+            applySoftGain(ctx, ctx->transferBuffer, outBytes);
             submitPcmToUrbs(ctx, ctx->transferBuffer, outBytes);
             ctx->framesWritten += outBytes / ctx->bytesPerFrame;
         }
@@ -1157,6 +1224,7 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioWriteRaw(
     env->ReleaseByteArrayElements(pcm, rawData, JNI_ABORT);
 
     // Submit to USB pipeline
+    applySoftGain(ctx, ctx->transferBuffer, outputBytes);
     submitPcmToUrbs(ctx, ctx->transferBuffer, outputBytes);
 
     ctx->framesWritten += totalFrames;

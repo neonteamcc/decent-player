@@ -161,6 +161,18 @@ class UsbAudioStream(
     }
 
     /**
+     * Software volume, linear amplitude 0..1. Exactly 1.0 bypasses the
+     * gain stage entirely (bit-perfect). Only for devices WITHOUT a
+     * Feature Unit volume — prefer
+     * [UsbAudioDevice.setHardwareVolumeFraction], which never touches
+     * samples. 16-bit output is TPDF-dithered when scaling.
+     */
+    fun setGain(linear: Float) {
+        if (nativeHandle == 0L) return
+        nativeSetGain(nativeHandle, linear)
+    }
+
+    /**
      * Stop accepting new writes. Does NOT drain the pipeline.
      * Call [drainUrbs] after this to wait for all in-flight URBs to complete.
      */
@@ -216,6 +228,7 @@ class UsbAudioStream(
     private external fun nativeUsbAudioStart(handle: Long): Boolean
     private external fun nativeUsbAudioWrite(handle: Long, pcmBuffer: FloatArray)
     private external fun nativeUsbAudioWriteRaw(handle: Long, pcmBuffer: ByteArray, inputBitDepth: Int)
+    private external fun nativeSetGain(handle: Long, gain: Float)
     private external fun nativeUsbAudioStop(handle: Long)
     private external fun nativeFlush(handle: Long)
     private external fun nativeDrainUrbs(handle: Long): Int

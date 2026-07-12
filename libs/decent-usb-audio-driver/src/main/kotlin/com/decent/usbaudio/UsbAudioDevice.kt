@@ -569,6 +569,7 @@ class UsbAudioDevice private constructor(private val context: Context) {
      */
     fun closeDevice() {
         cachedDeviceInfo = null
+        volumeRange = null
         claimedInterface?.let { iface ->
             connection?.releaseInterface(iface)
             claimedInterface = null
@@ -752,6 +753,103 @@ class UsbAudioDevice private constructor(private val context: Context) {
         }
         Log.w(TAG, "readClockValid: all GET_CUR attempts failed")
         return false
+    }
+
+    // ── Hardware volume (Feature Unit, both class versions) ─────────
+
+    /** Cached FU volume range; cleared on close (re-queried per device). */
+    private var volumeRange: UacControl.VolumeRange? = null
+
+    /** True when the playback path exposes a writable Volume control. */
+    fun hasHardwareVolume(): Boolean =
+            cachedDeviceInfo?.layout?.volume?.hasVolume == true
+
+    /**
+     * Query the Feature Unit's volume range (1/256 dB units). UAC1 uses
+     * GET_MIN/GET_MAX/GET_RES; UAC2 one RANGE request. Cached per open.
+     */
+    fun queryVolumeRange(): UacControl.VolumeRange? {
+        volumeRange?.let { return it }
+        val conn = connection ?: return null
+        val info = cachedDeviceInfo ?: return null
+        val layout = info.layout ?: return null
+        val vol = layout.volume?.takeIf { it.hasVolume } ?: return null
+        val ac = layout.controlInterfaceId.coerceAtLeast(0)
+        val ch = vol.writeChannels.first()
+
+        fun transfer(req: UacControl.ControlRequest): Int = conn.controlTransfer(
+                req.requestType, req.request, req.value, req.index,
+                req.data, req.data.size, 1000)
+
+        val range = if (info.uacVersion == UacVersion.UAC2) {
+            val req = UacControl.uac2GetVolumeRange(vol.unitId, ac, ch)
+            val ret = transfer(req)
+            if (ret >= 8) UacControl.parseUac2VolumeRange(req.data, ret) else null
+        } else {
+            fun getAttr(request: Int): Int? {
+                val req = UacControl.uac1GetVolume(vol.unitId, ac, ch, request)
+                return if (transfer(req) >= 2) UacControl.decodeS16(req.data, 0) else null
+            }
+            val min = getAttr(UacControl.UAC1_GET_MIN)
+            val max = getAttr(UacControl.UAC1_GET_MAX)
+            val res = getAttr(UacControl.UAC1_GET_RES) ?: 256
+            if (min != null && max != null && max > min) {
+                UacControl.VolumeRange(min, max, if (res > 0) res else 256)
+            } else null
+        }
+        if (range != null) {
+            Log.i(TAG, "FU volume range: ${range.minDb256 / 256.0}..${range.maxDb256 / 256.0} dB " +
+                    "res=${range.resDb256 / 256.0} dB (unit=${vol.unitId}, channels=${vol.writeChannels})")
+        } else {
+            Log.w(TAG, "FU volume range query failed (unit=${vol.unitId})")
+        }
+        volumeRange = range
+        return range
+    }
+
+    /**
+     * Set hardware volume as a 0..1 fraction, linear in dB across the
+     * Feature Unit's range and quantized to its resolution. Writes the
+     * master channel when it carries Volume, else every volume-capable
+     * channel (Apple/BTR3K-style per-channel units).
+     */
+    fun setHardwareVolumeFraction(fraction: Float): Boolean {
+        val conn = connection ?: return false
+        val info = cachedDeviceInfo ?: return false
+        val layout = info.layout ?: return false
+        val vol = layout.volume?.takeIf { it.hasVolume } ?: return false
+        val range = queryVolumeRange() ?: return false
+        val ac = layout.controlInterfaceId.coerceAtLeast(0)
+
+        val f = fraction.coerceIn(0f, 1f)
+        val res = range.resDb256.coerceAtLeast(1)
+        var raw = range.minDb256 + ((range.maxDb256 - range.minDb256) * f).toInt()
+        raw = range.minDb256 + ((raw - range.minDb256) / res) * res
+        raw = raw.coerceIn(range.minDb256, range.maxDb256)
+
+        var ok = true
+        for (ch in vol.writeChannels) {
+            val req = UacControl.setVolume(vol.unitId, ac, ch, raw)
+            val ret = conn.controlTransfer(
+                    req.requestType, req.request, req.value, req.index,
+                    req.data, req.data.size, 1000)
+            if (ret < 0) ok = false
+        }
+        Log.i(TAG, "setHardwareVolumeFraction($f): raw=$raw (${raw / 256.0} dB) ok=$ok")
+        return ok
+    }
+
+    /** Set the Feature Unit master mute, when the device exposes one. */
+    fun setHardwareMute(muted: Boolean): Boolean {
+        val conn = connection ?: return false
+        val info = cachedDeviceInfo ?: return false
+        val layout = info.layout ?: return false
+        val vol = layout.volume?.takeIf { it.masterMute } ?: return false
+        val req = UacControl.setMute(vol.unitId, layout.controlInterfaceId.coerceAtLeast(0), muted)
+        val ret = conn.controlTransfer(
+                req.requestType, req.request, req.value, req.index,
+                req.data, req.data.size, 1000)
+        return ret >= 0
     }
 
     /**

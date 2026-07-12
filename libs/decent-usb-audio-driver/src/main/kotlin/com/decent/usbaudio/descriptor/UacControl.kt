@@ -35,9 +35,9 @@ object UacControl {
         override fun hashCode(): Int = ((requestType * 31 + request) * 31 + value) * 31 + index
     }
 
-    // Request codes (audio10 Table A-9 / Audio20 Table A-14)
+    // Request codes (audio10 Table A-9 / Audio20 Table A-14).
+    // UAC1_GET_CUR is public below (GET attribute selectors).
     private const val UAC1_SET_CUR = 0x01
-    private const val UAC1_GET_CUR = 0x81
     private const val UAC2_CUR = 0x01
     private const val UAC2_RANGE = 0x02
 
@@ -45,6 +45,23 @@ object UacControl {
     private const val UAC1_SAMPLING_FREQ_CONTROL = 0x01 // audio10 Table A-19
     private const val UAC2_CS_SAM_FREQ_CONTROL = 0x01   // Audio20 Table A-17
     private const val UAC2_CS_CLOCK_VALID_CONTROL = 0x02
+
+    // Feature Unit control selectors — identical in both class versions
+    // (audio10 Table A-11 / Audio20 Table A-23).
+    private const val FU_MUTE_CONTROL = 0x01
+    private const val FU_VOLUME_CONTROL = 0x02
+
+    // UAC1 attribute requests for GETs (audio10 Table A-9)
+    const val UAC1_GET_CUR = 0x81
+    const val UAC1_GET_MIN = 0x82
+    const val UAC1_GET_MAX = 0x83
+    const val UAC1_GET_RES = 0x84
+
+    /**
+     * Feature Unit volume range in the class units: signed 1/256 dB steps
+     * (s16; 0x8000 is reserved for -infinity on CUR).
+     */
+    data class VolumeRange(val minDb256: Int, val maxDb256: Int, val resDb256: Int)
 
     // bmRequestType: Class | recipient, direction bit 7
     private const val RT_H2D_CLASS_ENDPOINT = 0x22
@@ -152,6 +169,73 @@ object UacControl {
         }
         return rates.toList()
     }
+
+    // ── Feature Unit volume/mute (both class versions) ─────────────
+    // Interface-recipient class requests: wValue = (selector << 8) | CN,
+    // wIndex = (unitId << 8) | acInterface. Volume payload: 2-byte s16 in
+    // 1/256 dB (audio10 §5.2.2.4.3.2 / Audio20 §5.2.5.7.2). The wire
+    // encoding of SET/GET CUR is byte-identical across versions; UAC1
+    // learns the range via GET_MIN/MAX/RES, UAC2 via one RANGE request.
+
+    /** SET_CUR/CUR(VOLUME) — identical encoding in UAC1 and UAC2. */
+    fun setVolume(unitId: Int, acInterface: Int, channel: Int, valueDb256: Int): ControlRequest =
+            ControlRequest(
+                    requestType = RT_H2D_CLASS_INTERFACE,
+                    request = UAC1_SET_CUR, // == UAC2_CUR
+                    value = (FU_VOLUME_CONTROL shl 8) or (channel and 0xFF),
+                    index = ((unitId and 0xFF) shl 8) or (acInterface and 0xFF),
+                    data = byteArrayOf(
+                            (valueDb256 and 0xFF).toByte(),
+                            ((valueDb256 shr 8) and 0xFF).toByte(),
+                    ),
+            )
+
+    /** SET_CUR/CUR(MUTE) — 1-byte payload, master channel only. */
+    fun setMute(unitId: Int, acInterface: Int, muted: Boolean): ControlRequest =
+            ControlRequest(
+                    requestType = RT_H2D_CLASS_INTERFACE,
+                    request = UAC1_SET_CUR,
+                    value = FU_MUTE_CONTROL shl 8,
+                    index = ((unitId and 0xFF) shl 8) or (acInterface and 0xFF),
+                    data = byteArrayOf(if (muted) 1 else 0),
+            )
+
+    /** UAC1: GET_CUR/MIN/MAX/RES(VOLUME) — pass one of [UAC1_GET_CUR]…[UAC1_GET_RES]. */
+    fun uac1GetVolume(unitId: Int, acInterface: Int, channel: Int, request: Int): ControlRequest =
+            ControlRequest(
+                    requestType = RT_D2H_CLASS_INTERFACE,
+                    request = request,
+                    value = (FU_VOLUME_CONTROL shl 8) or (channel and 0xFF),
+                    index = ((unitId and 0xFF) shl 8) or (acInterface and 0xFF),
+                    data = ByteArray(2),
+            )
+
+    /** UAC2: RANGE(VOLUME) — wNumSubRanges + N × (wMIN, wMAX, wRES) s16. */
+    fun uac2GetVolumeRange(unitId: Int, acInterface: Int, channel: Int): ControlRequest =
+            ControlRequest(
+                    requestType = RT_D2H_CLASS_INTERFACE,
+                    request = UAC2_RANGE,
+                    value = (FU_VOLUME_CONTROL shl 8) or (channel and 0xFF),
+                    index = ((unitId and 0xFF) shl 8) or (acInterface and 0xFF),
+                    data = ByteArray(2 + 8 * 6),
+            )
+
+    /** Parse the first subrange of a UAC2 RANGE(VOLUME) reply. */
+    fun parseUac2VolumeRange(data: ByteArray, length: Int): VolumeRange? {
+        if (length < 8) return null
+        val count = (data[0].toInt() and 0xFF) or ((data[1].toInt() and 0xFF) shl 8)
+        if (count < 1) return null
+        return VolumeRange(
+                minDb256 = decodeS16(data, 2),
+                maxDb256 = decodeS16(data, 4),
+                resDb256 = decodeS16(data, 6),
+        )
+    }
+
+    /** Little-endian signed 16-bit read (volume values). */
+    fun decodeS16(data: ByteArray, off: Int): Int =
+            ((data[off].toInt() and 0xFF) or ((data[off + 1].toInt() and 0xFF) shl 8))
+                    .toShort().toInt()
 
     private fun le32(data: ByteArray, off: Int): Int =
             (data[off].toInt() and 0xFF) or

@@ -110,6 +110,15 @@ struct UsbAudioContext {
     uint32_t ditherState;
 
     /**
+     * Software volume, linear amplitude 0..1. Exactly 1.0 = bypass (the
+     * bit-perfect path stays untouched). Used only when the device has no
+     * Feature Unit volume — hardware volume never touches samples.
+     * Applied by the write paths BEFORE the residual buffer so boundary
+     * leftovers are never scaled twice.
+     */
+    std::atomic<float> softGain;
+
+    /**
      * ISO packet length for feedback URBs = the feedback endpoint's
      * wMaxPacketSize (3 = full-speed Q10.14, 4 = Q16.16). Requesting more
      * than wMaxPacketSize makes SUBMITURB fail with EMSGSIZE; requesting
@@ -221,6 +230,12 @@ void padInt24ToInt32(const uint8_t *src, uint8_t *dst, int numSamples);
 
 /** int32 (24-bit sign-extended from libFLAC) → 32-bit: shift left 8. */
 void shiftInt32From24(const uint8_t *src, uint8_t *dst, int numSamples);
+
+/**
+ * Apply ctx->softGain in place to PCM at ctx->bitDepth. No-op at gain 1.0.
+ * TPDF dither at the LSB for 16-bit targets; round-to-nearest for 24/32.
+ */
+void applySoftGain(UsbAudioContext *ctx, uint8_t *pcm, int totalBytes);
 
 // ── Bit-depth reduction (TPDF-dithered, for 16-bit-only devices) ────
 

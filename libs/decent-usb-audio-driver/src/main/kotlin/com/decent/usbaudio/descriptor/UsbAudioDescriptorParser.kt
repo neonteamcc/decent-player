@@ -52,6 +52,8 @@ object UsbAudioDescriptorParser {
 
     // AudioControl CS_INTERFACE subtypes
     private const val AC_HEADER = 0x01
+    private const val AC_OUTPUT_TERMINAL = 0x03
+    private const val AC_FEATURE_UNIT = 0x06
     private const val AC_CLOCK_SOURCE_UAC2 = 0x0A
 
     // AudioStreaming CS_INTERFACE subtypes
@@ -75,6 +77,13 @@ object UsbAudioDescriptorParser {
         var controlInterfaceId = -1
         var clockSourceId = -1
         val alts = mutableListOf<StreamingAltSetting>()
+
+        // Volume discovery: Feature Units by bUnitID, plus the bSourceID of
+        // each speaker/headphone Output Terminal — the FU directly feeding
+        // an output OT is the playback volume (one hop covers every device
+        // in the fixture set; fallback: any FU with volume).
+        val featureUnits = mutableMapOf<Int, VolumeControl>()
+        val outputSources = mutableListOf<Int>()
 
         // Current interface context
         var inAudioControl = false
@@ -140,6 +149,18 @@ object UsbAudioDescriptorParser {
                                 clockSourceId < 0) {
                             clockSourceId = raw[i + 3].toInt() and 0xFF
                         }
+                        if (subtype == AC_OUTPUT_TERMINAL && len >= 9) {
+                            // Speaker/headphone-class terminals (0x03xx);
+                            // bSourceID sits at offset 7 in both versions.
+                            val terminalType = le16(raw, i + 4)
+                            if ((terminalType shr 8) == 0x03) {
+                                outputSources += raw[i + 7].toInt() and 0xFF
+                            }
+                        }
+                        if (subtype == AC_FEATURE_UNIT) {
+                            parseFeatureUnit(raw, i, len, uacVersion)
+                                    ?.let { featureUnits[it.unitId] = it }
+                        }
                     }
                     if (inAudioStreaming) {
                         builder?.onCsInterface(raw, i, len, subtype)
@@ -161,11 +182,77 @@ object UsbAudioDescriptorParser {
         finishAlt()
 
         if (uacVersion == UacVersion.UNKNOWN && controlInterfaceId < 0) return null
+
+        val volume = outputSources.firstNotNullOfOrNull { featureUnits[it] }
+                ?: featureUnits.values.firstOrNull { it.hasVolume }
+
         return UsbAudioDeviceLayout(
                 uacVersion = uacVersion,
                 controlInterfaceId = controlInterfaceId,
                 clockSourceId = clockSourceId,
                 streamingAlts = alts,
+                volume = volume?.takeIf { it.hasVolume },
+        )
+    }
+
+    /**
+     * Parse a FEATURE_UNIT's bmaControls into a [VolumeControl].
+     *
+     * UAC1 (audio10 Table 4-7): `bUnitID@3, bSourceID@4, bControlSize@5,
+     * bmaControls[(ch+1) × size]@6, iFeature` — Mute = bit 0, Volume =
+     * bit 1 of each entry's first byte.
+     * UAC2 (Audio20 Table 4-13): `bUnitID@3, bSourceID@4,
+     * bmaControls[(ch+1) × 4]@5, iFeature` — 2 bits per control:
+     * Mute = bits 1:0, Volume = bits 3:2; host-writable when 0b11.
+     */
+    private fun parseFeatureUnit(
+            raw: ByteArray,
+            i: Int,
+            len: Int,
+            uacVersion: UacVersion,
+    ): VolumeControl? {
+        val unitId = if (len >= 5) raw[i + 3].toInt() and 0xFF else return null
+
+        var masterVolume = false
+        var masterMute = false
+        val volumeChannels = mutableListOf<Int>()
+
+        if (uacVersion == UacVersion.UAC2) {
+            if (len < 10) return null
+            val entries = (len - 6) / 4
+            for (e in 0 until entries) {
+                val controls = le16(raw, i + 5 + e * 4) // bits of interest are in the low 16
+                val mute = (controls and 0x03) == 0x03
+                val volume = (controls and 0x0C) == 0x0C
+                if (e == 0) {
+                    masterMute = mute
+                    masterVolume = volume
+                } else if (volume) {
+                    volumeChannels += e
+                }
+            }
+        } else {
+            if (len < 8) return null
+            val controlSize = raw[i + 5].toInt() and 0xFF
+            if (controlSize < 1) return null
+            val entries = (len - 7) / controlSize
+            for (e in 0 until entries) {
+                val bits = raw[i + 6 + e * controlSize].toInt() and 0xFF
+                val mute = (bits and 0x01) != 0
+                val volume = (bits and 0x02) != 0
+                if (e == 0) {
+                    masterMute = mute
+                    masterVolume = volume
+                } else if (volume) {
+                    volumeChannels += e
+                }
+            }
+        }
+        return VolumeControl(
+                unitId = unitId,
+                masterVolume = masterVolume,
+                volumeChannels = volumeChannels,
+                masterMute = masterMute,
         )
     }
 

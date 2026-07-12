@@ -367,6 +367,9 @@ static void *decodeThreadFunc(void *arg) {
         if (!engine->running.load()) break;
 
         // Submit to USB (blocks naturally on URB pipeline = perfect backpressure)
+        // usbData always points at a driver-owned mutable buffer
+        // (pcmBuffer / convertBuffer / usbCtx->transferBuffer).
+        applySoftGain(engine->usbCtx, const_cast<uint8_t *>(usbData), usbBytes);
         submitPcmToUrbs(engine->usbCtx, usbData, usbBytes);
 
         int64_t newTotal = engine->framesDecoded.fetch_add(framesInBuffer) + framesInBuffer;

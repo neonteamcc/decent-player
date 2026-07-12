@@ -222,6 +222,50 @@ class UsbAudioDescriptorParserTest {
     }
 
     @Test
+    fun volume_btr13_masterMuteAndVolume() {
+        // FU#2: bControlSize=1, bmaControls = [0x03, 0x00, 0x00] —
+        // Mute+Volume on the master channel; OT#3 (Speaker) sources FU#2.
+        val vol = UsbAudioDescriptorParser.parse(btr13)!!.volume
+        assertNotNull(vol)
+        vol!!
+        assertEquals(2, vol.unitId)
+        assertTrue(vol.masterVolume)
+        assertTrue(vol.masterMute)
+        assertEquals(listOf(0), vol.writeChannels)
+    }
+
+    @Test
+    fun volume_btr3k_perChannel() {
+        // FU#2: bControlSize=2, master=0x0001 (mute only),
+        // ch1=ch2=0x0002 (volume) — per-channel writes required.
+        val vol = UsbAudioDescriptorParser.parse(btr3k)!!.volume!!
+        assertEquals(2, vol.unitId)
+        assertFalse(vol.masterVolume)
+        assertTrue(vol.masterMute)
+        assertEquals(listOf(1, 2), vol.volumeChannels)
+        assertEquals(listOf(1, 2), vol.writeChannels)
+    }
+
+    @Test
+    fun volume_dragonfly_masterViaOutputTerminal() {
+        // FU#5 master mute+volume; OT#2 (Speaker) sources FU#5 directly.
+        val vol = UsbAudioDescriptorParser.parse(dragonfly)!!.volume!!
+        assertEquals(5, vol.unitId)
+        assertTrue(vol.masterVolume)
+    }
+
+    @Test
+    fun volume_appleUac2_perChannelWritable() {
+        // UAC2 FU#2: master bmaControls=0x00000003 (mute r/w only),
+        // ch1/ch2 = 0x0000000C (volume r/w) — Apple's per-channel layout.
+        val vol = UsbAudioDescriptorParser.parse(appleUac2)!!.volume!!
+        assertEquals(2, vol.unitId)
+        assertFalse(vol.masterVolume)
+        assertTrue(vol.masterMute)
+        assertEquals(listOf(1, 2), vol.writeChannels)
+    }
+
+    @Test
     fun speedHint_negativeOnFullSpeedDevices() {
         assertFalse(UsbAudioDescriptorParser.definitelyHighSpeed(btr13))
         assertFalse(UsbAudioDescriptorParser.definitelyHighSpeed(btr3k))

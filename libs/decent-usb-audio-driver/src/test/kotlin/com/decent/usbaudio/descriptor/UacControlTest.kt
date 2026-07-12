@@ -2,6 +2,7 @@ package com.decent.usbaudio.descriptor
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /** Wire-encoding tests for [UacControl] against the spec examples. */
@@ -122,6 +123,44 @@ class UacControlTest {
         buf[off + 1] = ((v shr 8) and 0xFF).toByte()
         buf[off + 2] = ((v shr 16) and 0xFF).toByte()
         buf[off + 3] = ((v shr 24) and 0xFF).toByte()
+    }
+
+    @Test
+    fun volumeRequests_encodePerSpec() {
+        // SET_CUR(VOLUME) master channel, -12.00 dB = -3072 = 0xF400.
+        val set = UacControl.setVolume(unitId = 2, acInterface = 0, channel = 0, valueDb256 = -3072)
+        assertEquals(0x21, set.requestType)
+        assertEquals(0x01, set.request)
+        assertEquals(0x0200, set.value)          // VOLUME_CONTROL << 8 | CN 0
+        assertEquals(0x0200, set.index)          // unit 2 << 8 | ac 0
+        assertArrayEquals(byteArrayOf(0x00, 0xF4.toByte()), set.data)
+
+        val ch2 = UacControl.setVolume(2, 0, 2, 0)
+        assertEquals(0x0202, ch2.value)          // CN in the low byte
+
+        val getMin = UacControl.uac1GetVolume(2, 0, 0, UacControl.UAC1_GET_MIN)
+        assertEquals(0xA1, getMin.requestType)
+        assertEquals(0x82, getMin.request)
+
+        val mute = UacControl.setMute(2, 0, muted = true)
+        assertEquals(0x0100, mute.value)         // MUTE_CONTROL << 8
+        assertArrayEquals(byteArrayOf(0x01), mute.data)
+
+        val range = UacControl.uac2GetVolumeRange(2, 0, 1)
+        assertEquals(0x02, range.request)        // RANGE
+        assertEquals(0x0201, range.value)
+    }
+
+    @Test
+    fun volumeRange_parsesAndDecodesSigned() {
+        // wNumSubRanges=1, MIN=-60.00 dB (-15360=0xC400), MAX=0, RES=1.00 dB (256)
+        val data = byteArrayOf(1, 0, 0x00, 0xC4.toByte(), 0x00, 0x00, 0x00, 0x01)
+        val r = UacControl.parseUac2VolumeRange(data, data.size)!!
+        assertEquals(-15360, r.minDb256)
+        assertEquals(0, r.maxDb256)
+        assertEquals(256, r.resDb256)
+        assertEquals(-3072, UacControl.decodeS16(byteArrayOf(0x00, 0xF4.toByte()), 0))
+        assertNull(UacControl.parseUac2VolumeRange(ByteArray(4), 4))
     }
 
     @Test

@@ -166,6 +166,35 @@ data class StreamingAltSetting(
     }
 }
 
+/**
+ * Hardware volume capability from a Feature Unit in the playback path.
+ *
+ * Addressing quirk this models: some devices put Volume on the master
+ * channel (FiiO BTR13: bmaControls(0) = Mute+Volume), others only on the
+ * individual channels (Apple dongles, FiiO BTR3K: master carries Mute,
+ * channels 1..N carry Volume) — the host must then write each channel.
+ */
+data class VolumeControl(
+        /** Feature Unit bUnitID (wIndex high byte of the requests). */
+        val unitId: Int,
+
+        /** Volume controllable on the master channel (CN = 0). */
+        val masterVolume: Boolean,
+
+        /** Channels (1-based CN) with volume when the master lacks it. */
+        val volumeChannels: List<Int>,
+
+        /** Mute controllable on the master channel. */
+        val masterMute: Boolean,
+) {
+    val hasVolume: Boolean
+        get() = masterVolume || volumeChannels.isNotEmpty()
+
+    /** Channel numbers to address for a volume write. */
+    val writeChannels: List<Int>
+        get() = if (masterVolume) listOf(0) else volumeChannels
+}
+
 /** Complete parsed layout of the device's (first) audio function. */
 data class UsbAudioDeviceLayout(
         val uacVersion: UacVersion,
@@ -178,6 +207,9 @@ data class UsbAudioDeviceLayout(
 
         /** Playback alt settings across all AudioStreaming interfaces. */
         val streamingAlts: List<StreamingAltSetting>,
+
+        /** Playback-path Feature Unit volume capability, or null. */
+        val volume: VolumeControl? = null,
 ) {
     /** True when at least one playback path exists. */
     val hasPlayback: Boolean
