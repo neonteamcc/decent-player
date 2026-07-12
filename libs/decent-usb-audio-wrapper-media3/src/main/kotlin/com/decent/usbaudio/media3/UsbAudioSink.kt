@@ -644,6 +644,7 @@ class UsbAudioSink(
         }
 
         usbAudioStream = stream
+        setActiveVolumeStream(stream)
         currentSampleRate = sampleRate
         currentUsbRate = usbRate
         currentChannelCount = channelCount
@@ -774,6 +775,7 @@ class UsbAudioSink(
     private fun releaseUsbStream() {
         val stream = usbAudioStream ?: return
         usbAudioStream = null
+        setActiveVolumeStream(null)
 
         // Stop USB stream FIRST — sets ctx->running=false, which unblocks
         // submitPcmToUrbs inside the native engine's decode thread.
@@ -956,6 +958,23 @@ class UsbAudioSink(
 
     companion object {
         private const val TAG = "UsbAudioSink"
+
+        /**
+         * The currently active USB stream, for app-side volume mirroring on
+         * devices WITHOUT a Feature Unit (software gain fallback via
+         * [UsbAudioStream.setGain]). Null when no bit-perfect stream is live.
+         * Devices with hardware volume should be driven through
+         * [com.decent.usbaudio.UsbAudioDevice.setHardwareVolumeFraction]
+         * instead — that path never touches samples.
+         */
+        @JvmStatic
+        @Volatile
+        var activeVolumeStream: UsbAudioStream? = null
+            private set
+
+        internal fun setActiveVolumeStream(stream: UsbAudioStream?) {
+            activeVolumeStream = stream
+        }
 
         /**
          * Wraps a [LoadControl] to suppress ExoPlayer loading when the native
