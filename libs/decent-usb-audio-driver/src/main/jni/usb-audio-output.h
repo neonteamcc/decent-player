@@ -15,7 +15,8 @@
 #include <cstdint>
 #include <linux/usbdevice_fs.h>
 
-struct Decimator; // decimator.h
+struct Decimator;          // decimator.h — in-family ÷2/÷4 half-band
+struct RationalResampler;  // resampler.h — cross-family L/M polyphase
 
 /**
  * Maximum isochronous packets per URB submission (compile-time capacity;
@@ -116,12 +117,20 @@ struct UsbAudioContext {
      */
     int32_t feedbackPacketLen;
 
-    // ── In-family integer decimation (192k → 96k on capped devices) ──
-    /** 1 = passthrough (default), 2 or 4 = half-band decimation. */
-    int32_t decimationFactor;
+    // ── Sample rate conversion (sources the device can't run at) ──
+    /**
+     * Source rate when converting, 0 = passthrough. sampleRate is always
+     * the USB (output) rate; write() callers feed inputRate frames.
+     * In-family ÷2/÷4 uses the half-band [decimator]; anything else
+     * (44.1k → 48k etc.) uses the rational [resampler].
+     */
+    int32_t inputRate;
 
-    /** Streaming decimator instance, non-null when decimationFactor > 1. */
+    /** Half-band ÷2/÷4 instance, or null. */
     Decimator *decimator;
+
+    /** Rational L/M instance, or null. Mutually exclusive with decimator. */
+    RationalResampler *resampler;
 
     /** Canonical full-scale int32 staging buffer (input domain). */
     uint8_t *canonicalBuffer;
@@ -225,9 +234,10 @@ void ditherInt32ToInt16(const uint8_t *src, uint8_t *dst, int numSamples, uint32
 void packInt32ToInt24(const uint8_t *src, uint8_t *dst, int numSamples);
 
 /**
- * Decimate canonical int32 PCM through ctx->decimator and convert to the
- * DAC bit depth into ctx->transferBuffer.
+ * Rate-convert canonical int32 PCM (half-band decimator or rational
+ * resampler, whichever is active) and convert to the DAC bit depth into
+ * ctx->transferBuffer.
  * @return output byte count (0 when nothing was produced).
  * Safe to call with src == ctx->canonicalBuffer.
  */
-int decimateAndConvert(UsbAudioContext *ctx, const uint8_t *canonicalSrc, int inFrames);
+int resampleAndConvert(UsbAudioContext *ctx, const uint8_t *canonicalSrc, int inFrames);

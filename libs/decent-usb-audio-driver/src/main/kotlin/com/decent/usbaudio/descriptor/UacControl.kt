@@ -39,6 +39,7 @@ object UacControl {
     private const val UAC1_SET_CUR = 0x01
     private const val UAC1_GET_CUR = 0x81
     private const val UAC2_CUR = 0x01
+    private const val UAC2_RANGE = 0x02
 
     // Control selectors
     private const val UAC1_SAMPLING_FREQ_CONTROL = 0x01 // audio10 Table A-19
@@ -99,6 +100,64 @@ object UacControl {
                     index = ((clockSourceId and 0xFF) shl 8) or (acInterface and 0xFF),
                     data = ByteArray(4),
             )
+
+    /**
+     * UAC2: RANGE(SAM_FREQ) from the clock source entity — the ONLY place
+     * a UAC2 device advertises its sample rates (the Format Type I
+     * descriptor carries none). Reply: `wNumSubRanges` (LE16) followed by
+     * N × (dMIN, dMAX, dRES) LE32 triplets (Audio20 §5.2.5.1.1).
+     */
+    fun uac2GetSampleRateRange(
+            clockSourceId: Int,
+            acInterface: Int,
+            maxRanges: Int = 32,
+    ): ControlRequest =
+            ControlRequest(
+                    requestType = RT_D2H_CLASS_INTERFACE,
+                    request = UAC2_RANGE,
+                    value = UAC2_CS_SAM_FREQ_CONTROL shl 8,
+                    index = ((clockSourceId and 0xFF) shl 8) or (acInterface and 0xFF),
+                    data = ByteArray(2 + maxRanges * 12),
+            )
+
+    /**
+     * Parse a RANGE(SAM_FREQ) reply into discrete rates. Continuous
+     * subranges (dRES > 0) are enumerated when small; unbounded ones
+     * contribute their endpoints only (a rate picker can still test
+     * membership against MIN/MAX separately if ever needed — real DACs
+     * overwhelmingly use discrete MIN==MAX triplets).
+     */
+    fun parseUac2SampleRateRanges(data: ByteArray, length: Int): List<Int> {
+        if (length < 2) return emptyList()
+        val count = (data[0].toInt() and 0xFF) or ((data[1].toInt() and 0xFF) shl 8)
+        val rates = sortedSetOf<Int>()
+        for (i in 0 until count) {
+            val off = 2 + i * 12
+            if (off + 12 > length) break
+            val min = le32(data, off)
+            val max = le32(data, off + 4)
+            val res = le32(data, off + 8)
+            when {
+                min <= 0 -> {}
+                max <= min || res <= 0 -> {
+                    rates += min
+                    if (max > min) rates += max
+                }
+                (max - min) / res <= 64 -> {
+                    var v = min
+                    while (v <= max) { rates += v; v += res }
+                }
+                else -> { rates += min; rates += max }
+            }
+        }
+        return rates.toList()
+    }
+
+    private fun le32(data: ByteArray, off: Int): Int =
+            (data[off].toInt() and 0xFF) or
+                    ((data[off + 1].toInt() and 0xFF) shl 8) or
+                    ((data[off + 2].toInt() and 0xFF) shl 16) or
+                    ((data[off + 3].toInt() and 0xFF) shl 24)
 
     /** UAC2: GET CUR(CLOCK_VALID) from the clock source entity, 1 byte. */
     fun uac2GetClockValid(clockSourceId: Int, acInterface: Int): ControlRequest =

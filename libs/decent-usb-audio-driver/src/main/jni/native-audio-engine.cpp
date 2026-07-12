@@ -319,7 +319,7 @@ static void *decodeThreadFunc(void *arg) {
         const uint8_t *usbData;
         int usbBytes;
 
-        if (engine->usbCtx->decimationFactor > 1 && engine->usbCtx->decimator) {
+        if (engine->usbCtx->inputRate > 0) {
             // In-family decimation (192k FLAC on a 96k device): canonicalize
             // to full-scale int32, then decimate + convert into the USB
             // context's transfer buffer. framesDecoded stays in the source
@@ -332,9 +332,9 @@ static void *decodeThreadFunc(void *arg) {
                 LOGE("Unsupported source depth %d for decimation", engine->bitsPerSample);
                 break;
             }
-            usbBytes = decimateAndConvert(engine->usbCtx, engine->convertBuffer, framesInBuffer);
+            usbBytes = resampleAndConvert(engine->usbCtx, engine->convertBuffer, framesInBuffer);
             if (usbBytes <= 0) {
-                LOGE("decimateAndConvert produced no data");
+                LOGE("resampleAndConvert produced no data");
                 break;
             }
             usbData = engine->usbCtx->transferBuffer;

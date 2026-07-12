@@ -64,6 +64,67 @@ class UacControlTest {
     }
 
     @Test
+    fun uac2SampleRateRange_encodesRangeRequest() {
+        val req = UacControl.uac2GetSampleRateRange(9, 0)
+        assertEquals(0xA1, req.requestType)
+        assertEquals(0x02, req.request)          // RANGE
+        assertEquals(0x0100, req.value)
+        assertEquals(0x0900, req.index)
+        assertEquals(2 + 32 * 12, req.data.size)
+    }
+
+    @Test
+    fun parseRanges_singleDiscreteRate() {
+        // EarPods-style: one subrange, MIN==MAX==48000, RES 0.
+        val data = rangeReply(Triple(48000, 48000, 0))
+        assertEquals(listOf(48000), UacControl.parseUac2SampleRateRanges(data, data.size))
+    }
+
+    @Test
+    fun parseRanges_discreteList() {
+        // XMOS-style: each rate its own MIN==MAX triplet.
+        val data = rangeReply(
+            Triple(44100, 44100, 0), Triple(48000, 48000, 0),
+            Triple(88200, 88200, 0), Triple(96000, 96000, 0),
+        )
+        assertEquals(listOf(44100, 48000, 88200, 96000),
+            UacControl.parseUac2SampleRateRanges(data, data.size))
+    }
+
+    @Test
+    fun parseRanges_continuousAndDegenerate() {
+        // Small continuous range enumerates; huge one contributes endpoints.
+        val small = rangeReply(Triple(44100, 48000, 3900))
+        assertEquals(listOf(44100, 48000), UacControl.parseUac2SampleRateRanges(small, small.size))
+        val huge = rangeReply(Triple(8000, 192000, 1))
+        assertEquals(listOf(8000, 192000), UacControl.parseUac2SampleRateRanges(huge, huge.size))
+        // Truncated reply and garbage lengths return what fits / nothing.
+        assertEquals(emptyList<Int>(), UacControl.parseUac2SampleRateRanges(ByteArray(1), 1))
+        val truncated = rangeReply(Triple(44100, 44100, 0), Triple(48000, 48000, 0))
+        assertEquals(listOf(44100),
+            UacControl.parseUac2SampleRateRanges(truncated, 2 + 12)) // only 1st triplet fits
+    }
+
+    private fun rangeReply(vararg ranges: Triple<Int, Int, Int>): ByteArray {
+        val out = ByteArray(2 + ranges.size * 12)
+        out[0] = (ranges.size and 0xFF).toByte()
+        out[1] = ((ranges.size shr 8) and 0xFF).toByte()
+        ranges.forEachIndexed { i, (min, max, res) ->
+            writeLe32(out, 2 + i * 12, min)
+            writeLe32(out, 2 + i * 12 + 4, max)
+            writeLe32(out, 2 + i * 12 + 8, res)
+        }
+        return out
+    }
+
+    private fun writeLe32(buf: ByteArray, off: Int, v: Int) {
+        buf[off] = (v and 0xFF).toByte()
+        buf[off + 1] = ((v shr 8) and 0xFF).toByte()
+        buf[off + 2] = ((v shr 16) and 0xFF).toByte()
+        buf[off + 3] = ((v shr 24) and 0xFF).toByte()
+    }
+
+    @Test
     fun busSpeed_mapsIoctlValues() {
         assertEquals(UsbBusSpeed.FULL, UsbBusSpeed.fromIoctl(2))
         assertEquals(UsbBusSpeed.HIGH, UsbBusSpeed.fromIoctl(3))

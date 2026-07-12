@@ -515,13 +515,15 @@ class UsbAudioSink(
         val bitDepth = deviceInfo.bestBitDepth
         val altSetting = deviceInfo.bestAltSetting
 
-        // Rate mapping: sources above the device's ceiling play via
-        // in-family integer decimation (192k→96k ÷2, 384k→96k ÷4,
-        // 176.4k→88.2k ÷2). usbRate is what the DAC runs at; the native
-        // layer decimates sampleRate → usbRate.
-        val (usbRate, decimation) = chooseUsbRate(deviceInfo, altSetting, sampleRate)
-        if (decimation > 1) {
-            Log.i(TAG, "Rate $sampleRate not supported — decimating ÷$decimation → $usbRate Hz")
+        // Rate mapping: sources the device can't run at play via rate
+        // conversion — in-family ÷2/÷4 half-band (192k→96k), or the
+        // rational polyphase resampler cross-family (44.1k→48k on
+        // 48-only devices, MaxPacketsOnly devices pinned to one rate).
+        // usbRate is what the DAC runs at; conversionInput is the source
+        // rate the native layer converts from (0 = bit-perfect passthrough).
+        val (usbRate, conversionInput) = chooseUsbRate(deviceInfo, altSetting, sampleRate)
+        if (conversionInput > 0) {
+            Log.i(TAG, "Rate $sampleRate not supported — converting → $usbRate Hz")
         }
         Log.i(TAG, "Bit-perfect: source=${trackBitDepth}bit → alt=$altSetting usb=${bitDepth}bit " +
                 "rate=$sampleRate→$usbRate clockSource=0x${deviceInfo.clockSourceId.toString(16)}")
@@ -537,7 +539,7 @@ class UsbAudioSink(
             maxPacketSize = deviceInfo.maxPacketSize,
             packetsPerSecond = deviceInfo.busSpeed.packetsPerSecond,
             feedbackMaxPacket = feedbackMaxPacket(deviceInfo, altSetting),
-            decimationFactor = decimation
+            inputSampleRate = conversionInput
         )
 
         if (!stream.isReady) {
@@ -582,7 +584,7 @@ class UsbAudioSink(
                 maxPacketSize = deviceInfo.maxPacketSize,
                 packetsPerSecond = deviceInfo.busSpeed.packetsPerSecond,
                 feedbackMaxPacket = feedbackMaxPacket(deviceInfo, altSetting),
-                decimationFactor = decimation
+                inputSampleRate = conversionInput
             )
             if (!stream.isReady) {
                 Log.e(TAG, "USB stream recreation failed after reopen")
@@ -713,11 +715,22 @@ class UsbAudioSink(
     private var currentUsbRate: Int = 0
 
     /**
-     * Map a track rate onto the device: passthrough when advertised (and,
-     * at full speed, when it fits wMaxPacketSize), else in-family integer
-     * division (÷2, ÷4). UAC2 devices advertise no rates in the format
-     * descriptor (supportsRate is permissive) → passthrough, as before.
-     * @return Pair(usbRate, decimationFactor)
+     * Map a track rate onto the device.
+     *
+     * Acceptance for a candidate rate: advertised by the alt setting
+     * (UAC1 Format Type I list) AND by the device (UAC2 clock RANGE list
+     * in [UsbAudioDeviceInfo.sampleRates], when known) AND, at full
+     * speed, fits the wMaxPacketSize budget AND, on MaxPacketsOnly
+     * devices, produces exactly wMaxPacketSize-sized nominal packets
+     * (such firmwares — FiiO BTR3 class — misbehave at every other rate;
+     * that is the historical BTR3 44.1 kHz Linux bug).
+     *
+     * Preference order: exact → in-family ÷2/÷4 (half-band, cheapest) →
+     * smallest acceptable rate above the track (content-preserving
+     * upsample, e.g. 44.1k → 48k) → largest acceptable below. No
+     * acceptable candidate → passthrough attempt, as before.
+     *
+     * @return Pair(usbRate, conversionInputRate) — input 0 = passthrough.
      */
     private fun chooseUsbRate(
         info: com.decent.usbaudio.UsbAudioDeviceInfo,
@@ -725,16 +738,27 @@ class UsbAudioSink(
         trackRate: Int
     ): Pair<Int, Int> {
         val alt = info.layout?.streamingAlts?.firstOrNull { it.altSetting == altSetting }
-            ?: return trackRate to 1
-        fun ok(r: Int) = alt.supportsRate(r) &&
-            (info.busSpeed != com.decent.usbaudio.descriptor.UsbBusSpeed.FULL ||
-                alt.rateFitsMaxPacket(r))
-        return when {
-            ok(trackRate) -> trackRate to 1
-            trackRate % 2 == 0 && ok(trackRate / 2) -> trackRate / 2 to 2
-            trackRate % 4 == 0 && ok(trackRate / 4) -> trackRate / 4 to 4
-            else -> trackRate to 1 // no mapping — logged by the UAC1 warning
+            ?: return trackRate to 0
+        val deviceRates = info.sampleRates
+        fun ok(r: Int): Boolean {
+            if (!alt.supportsRate(r)) return false
+            if (deviceRates.isNotEmpty() && r !in deviceRates) return false
+            if (info.busSpeed == com.decent.usbaudio.descriptor.UsbBusSpeed.FULL) {
+                if (!alt.rateFitsMaxPacket(r)) return false
+                if (alt.maxPacketsOnly &&
+                    (r % 1000 != 0 || (r / 1000) * alt.bytesPerFrame != alt.maxPacketSize)
+                ) return false
+            }
+            return true
         }
+        if (ok(trackRate)) return trackRate to 0
+        if (trackRate % 2 == 0 && ok(trackRate / 2)) return trackRate / 2 to trackRate
+        if (trackRate % 4 == 0 && ok(trackRate / 4)) return trackRate / 4 to trackRate
+        val candidates = (alt.sampleRates + deviceRates).distinct().filter { ok(it) }
+        val target = candidates.filter { it > trackRate }.minOrNull()
+            ?: candidates.filter { it < trackRate }.maxOrNull()
+            ?: return trackRate to 0 // nothing known — passthrough attempt
+        return target to trackRate
     }
 
     /** wMaxPacketSize of the alt setting's feedback endpoint, or 0. */

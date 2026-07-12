@@ -97,6 +97,17 @@ Contributions of descriptor dumps for full-speed devices are very welcome
 — see `docs/hardware/fixtures/README.md` for the format and
 [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
+- [x] Cross-family rational resampling: `resampler.cpp` — polyphase
+  Kaiser windowed-sinc (100 dB stopband, passband flat to 20 kHz for
+  44.1↔48 pairs), streaming L/M with phase carry. Host-verified:
+  passband +0.0000 dB, alias rejection −107…−119 dB, exact frame
+  counts on odd chunks. Covers 44.1-family tracks on 48-only devices
+  (Apple dongle class) and pins MaxPacketsOnly firmwares (BTR3 class)
+  to the one rate where nominal packet == wMaxPacketSize.
+- [x] UAC2 rate discovery: RANGE(SAM_FREQ) on the clock source at open
+  (`UacControl.uac2GetSampleRateRange` + parser, unit-tested); the rate
+  picker consults the device list instead of staying permissive.
+
 ## Rate policy (decided)
 
 Tracks whose sample rate exceeds the device's ceiling still play:

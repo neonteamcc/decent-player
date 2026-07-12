@@ -40,11 +40,13 @@ import android.util.Log
  * @param feedbackMaxPacket wMaxPacketSize of the feedback endpoint
  *                         (3 = full-speed Q10.14, 4 = Q16.16), or 0 to
  *                         use the speed-appropriate spec default.
- * @param decimationFactor 1 (default) = bit-perfect passthrough; 2 or 4 =
- *                         half-band decimation for sources above the
- *                         device's rate ceiling (192k→96k etc.).
- *                         [sampleRate] is the USB (output) rate; write()
- *                         callers feed sampleRate × decimationFactor.
+ * @param inputSampleRate  0 (default) = bit-perfect passthrough. Otherwise
+ *                         the SOURCE rate: the native layer converts it to
+ *                         [sampleRate] — in-family ÷2/÷4 via a half-band
+ *                         decimator (192k→96k), anything else via the
+ *                         rational polyphase resampler (44.1k→48k for
+ *                         devices without the 44.1 family). write() callers
+ *                         feed inputSampleRate frames.
  */
 class UsbAudioStream(
         fd: Int,
@@ -57,7 +59,7 @@ class UsbAudioStream(
         maxPacketSize: Int,
         packetsPerSecond: Int = 8000,
         feedbackMaxPacket: Int = 0,
-        decimationFactor: Int = 1
+        inputSampleRate: Int = 0
 ) {
 
     /** Native UsbAudioContext pointer. Exposed for NativeAudioEngine which
@@ -69,7 +71,7 @@ class UsbAudioStream(
         nativeHandle = nativeUsbAudioCreate(
                 fd, interfaceId, endpointOut, endpointFeedback,
                 sampleRate, channelCount, bitDepth, maxPacketSize,
-                packetsPerSecond, feedbackMaxPacket, decimationFactor
+                packetsPerSecond, feedbackMaxPacket, inputSampleRate
         )
         if (nativeHandle == 0L) {
             Log.e(TAG, "nativeUsbAudioCreate returned 0 — check logcat for native errors")
@@ -206,7 +208,7 @@ class UsbAudioStream(
     private external fun nativeUsbAudioCreate(
             fd: Int, interfaceId: Int, endpointOut: Int, endpointFeedback: Int,
             sampleRate: Int, channelCount: Int, bitDepth: Int, maxPacketSize: Int,
-            packetsPerSecond: Int, feedbackMaxPacket: Int, decimationFactor: Int
+            packetsPerSecond: Int, feedbackMaxPacket: Int, inputSampleRate: Int
     ): Long
 
     private external fun nativeUsbAudioSetAltSetting(handle: Long, altSetting: Int): Boolean

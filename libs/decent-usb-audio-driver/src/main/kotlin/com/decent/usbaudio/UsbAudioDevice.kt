@@ -302,6 +302,14 @@ class UsbAudioDevice private constructor(private val context: Context) {
             val (alt, bits) = parseBestAltSetting(conn)
             bestAlt = alt
             bestBits = bits
+            // UAC2 advertises rates only via the clock source RANGE request
+            // (the Format Type I descriptor carries none) — query them so
+            // the rate picker can detect unsupported rates up front
+            // (e.g. 44.1-family tracks on a 48-only device).
+            if (clockSourceId > 0) {
+                bestRates = queryUac2SampleRates(
+                        conn, clockSourceId, layout?.controlInterfaceId ?: 0)
+            }
         }
         Log.i(TAG, "Auto-detected: clockSourceId=0x${clockSourceId.toString(16)}, " +
                 "bestAlt=$bestAlt, bestBits=$bestBits")
@@ -325,6 +333,30 @@ class UsbAudioDevice private constructor(private val context: Context) {
         )
         cachedDeviceInfo = info
         return info
+    }
+
+    /**
+     * Query a UAC2 clock source's supported rates via RANGE(SAM_FREQ).
+     * Failure is non-fatal (empty list → the rate picker stays permissive,
+     * matching pre-RANGE behavior).
+     */
+    private fun queryUac2SampleRates(
+            conn: UsbDeviceConnection,
+            clockSourceId: Int,
+            acInterface: Int,
+    ): List<Int> {
+        val req = UacControl.uac2GetSampleRateRange(
+                clockSourceId, if (acInterface >= 0) acInterface else 0)
+        val ret = conn.controlTransfer(
+                req.requestType, req.request, req.value, req.index,
+                req.data, req.data.size, 1000)
+        if (ret < 2) {
+            Log.w(TAG, "UAC2 RANGE(SAM_FREQ) failed (ret=$ret) — rates unknown")
+            return emptyList()
+        }
+        val rates = UacControl.parseUac2SampleRateRanges(req.data, ret)
+        Log.i(TAG, "UAC2 clock RANGE rates: $rates")
+        return rates
     }
 
     /**
