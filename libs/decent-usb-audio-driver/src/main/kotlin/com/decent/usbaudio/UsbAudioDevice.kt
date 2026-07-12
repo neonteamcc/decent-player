@@ -839,6 +839,43 @@ class UsbAudioDevice private constructor(private val context: Context) {
         return ok
     }
 
+    /**
+     * Read the Feature Unit's current volume as a 0..1 fraction of its own
+     * dB range — the inverse of [setHardwareVolumeFraction]'s mapping — or
+     * null when there is no Volume control or the read fails. Lets the host
+     * adopt the DAC's knob position at engagement instead of clobbering it.
+     * A CUR of 0x8000 (-infinity, audio10 §5.2.2.4.3.2) reads as 0.
+     */
+    fun readHardwareVolumeFraction(): Float? {
+        val conn = connection ?: return null
+        val info = cachedDeviceInfo ?: return null
+        val layout = info.layout ?: return null
+        val vol = layout.volume?.takeIf { it.hasVolume } ?: return null
+        val range = queryVolumeRange() ?: return null
+        val ac = layout.controlInterfaceId.coerceAtLeast(0)
+        val ch = vol.writeChannels.first()
+
+        val req = if (info.uacVersion == UacVersion.UAC2) {
+            UacControl.uac2GetVolume(vol.unitId, ac, ch)
+        } else {
+            UacControl.uac1GetVolume(vol.unitId, ac, ch, UacControl.UAC1_GET_CUR)
+        }
+        val ret = conn.controlTransfer(
+                req.requestType, req.request, req.value, req.index,
+                req.data, req.data.size, 1000)
+        if (ret < 2) {
+            Log.w(TAG, "FU volume CUR read failed (unit=${vol.unitId}, ch=$ch)")
+            return null
+        }
+        val cur = UacControl.decodeS16(req.data, 0)
+        if (cur == -32768) return 0f // 0x8000: -infinity
+        val span = (range.maxDb256 - range.minDb256).toFloat()
+        if (span <= 0f) return null
+        val fraction = ((cur - range.minDb256) / span).coerceIn(0f, 1f)
+        Log.i(TAG, "FU volume CUR: $cur (${cur / 256.0} dB) -> fraction=$fraction")
+        return fraction
+    }
+
     /** Set the Feature Unit master mute, when the device exposes one. */
     fun setHardwareMute(muted: Boolean): Boolean {
         val conn = connection ?: return false

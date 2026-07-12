@@ -149,6 +149,15 @@ class UacControlTest {
         val range = UacControl.uac2GetVolumeRange(2, 0, 1)
         assertEquals(0x02, range.request)        // RANGE
         assertEquals(0x0201, range.value)
+
+        // UAC2 reads CUR with request code 0x01 + direction bit — NOT the
+        // UAC1-style 0x81 attribute request.
+        val getCur2 = UacControl.uac2GetVolume(10, 0, 0)
+        assertEquals(0xA1, getCur2.requestType)
+        assertEquals(0x01, getCur2.request)
+        assertEquals(0x0200, getCur2.value)
+        assertEquals(0x0A00, getCur2.index)      // unit 10 << 8 | ac 0
+        assertEquals(2, getCur2.data.size)
     }
 
     @Test

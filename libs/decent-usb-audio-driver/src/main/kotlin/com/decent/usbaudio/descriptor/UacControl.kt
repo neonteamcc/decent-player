@@ -210,6 +210,16 @@ object UacControl {
                     data = ByteArray(2),
             )
 
+    /** UAC2: GET CUR(VOLUME) — CUR request code with the direction bit. */
+    fun uac2GetVolume(unitId: Int, acInterface: Int, channel: Int): ControlRequest =
+            ControlRequest(
+                    requestType = RT_D2H_CLASS_INTERFACE,
+                    request = UAC2_CUR,
+                    value = (FU_VOLUME_CONTROL shl 8) or (channel and 0xFF),
+                    index = ((unitId and 0xFF) shl 8) or (acInterface and 0xFF),
+                    data = ByteArray(2),
+            )
+
     /** UAC2: RANGE(VOLUME) — wNumSubRanges + N × (wMIN, wMAX, wRES) s16. */
     fun uac2GetVolumeRange(unitId: Int, acInterface: Int, channel: Int): ControlRequest =
             ControlRequest(
