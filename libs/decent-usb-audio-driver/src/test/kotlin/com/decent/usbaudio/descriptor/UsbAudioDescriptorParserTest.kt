@@ -107,6 +107,29 @@ class UsbAudioDescriptorParserTest {
             "08 25 01 00 00 01 64 00",
     )
 
+    // ── FiiO KA17 (2972:0093) — REAL raw bytes from pyusb GET_DESCRIPTOR
+    //    (macOS), no hand-reconstruction. High-speed UAC2: clock source
+    //    0x29 behind selector 0x28, FU#10 with MASTER Mute+Volume, three
+    //    alts (32-bit PCM / 16-bit PCM / DSD with bmFormats 0x80000000),
+    //    4-byte async feedback EP marked via usage bits. ──────────────
+    private val ka17 = hex(
+            "12 01 00 02 EF 02 01 40 72 29 93 00 25 02 01 03 02 02 09 02 55 01 05 01",
+            "00 80 00 08 0B 00 02 01 00 20 00 09 04 00 00 00 01 01 20 03 09 24 01 00",
+            "02 08 48 00 00 08 24 0A 29 03 07 00 09 08 24 0B 28 01 29 03 08 11 24 02",
+            "02 01 01 00 28 02 00 00 00 00 0B 00 00 06 12 24 06 0A 02 0F 00 00 00 00",
+            "00 00 00 00 00 00 00 00 0C 24 03 14 01 03 00 0A 28 00 00 00 09 04 01 00",
+            "00 01 02 20 04 09 04 01 01 02 01 02 20 04 10 24 01 02 00 01 01 00 00 00",
+            "02 00 00 00 00 0B 06 24 02 01 04 20 07 05 01 05 08 03 01 08 25 01 00 00",
+            "02 08 00 07 05 81 11 04 00 04 09 04 01 02 02 01 02 20 04 10 24 01 02 00",
+            "01 01 00 00 00 02 00 00 00 00 0B 06 24 02 01 02 10 07 05 01 05 84 01 01",
+            "08 25 01 00 00 02 08 00 07 05 81 11 04 00 04 09 04 01 03 02 01 02 20 04",
+            "10 24 01 02 00 01 00 00 00 80 02 00 00 00 00 0B 06 24 02 01 04 20 07 05",
+            "01 05 08 03 01 08 25 01 00 00 02 08 00 07 05 81 11 04 00 04 09 04 02 00",
+            "00 FE 01 01 0A 09 21 07 FA 00 40 00 10 01 09 04 03 00 01 03 00 00 0E 09",
+            "21 10 01 00 01 22 15 00 07 05 83 03 40 00 08 09 04 04 00 02 03 00 00 06",
+            "09 21 11 01 00 01 22 40 00 07 05 84 03 40 00 08 07 05 02 03 40 00 08",
+    )
+
     @Test
     fun btr13_parsesAsUac1FullLayout() {
         val layout = UsbAudioDescriptorParser.parse(btr13)
@@ -284,6 +307,46 @@ class UsbAudioDescriptorParserTest {
         // Iso mult bits set (2 transactions/microframe).
         assertTrue(UsbAudioDescriptorParser.definitelyHighSpeed(
                 hex("07 05 01 05 00 0C 01")))
+    }
+
+    @Test
+    fun ka17_parsesRealHighSpeedUac2Bytes() {
+        val layout = UsbAudioDescriptorParser.parse(ka17)!!
+        assertEquals(UacVersion.UAC2, layout.uacVersion)
+        assertEquals(0, layout.controlInterfaceId)
+        assertEquals(0x29, layout.clockSourceId) // the SOURCE, not selector 0x28
+        assertEquals(3, layout.streamingAlts.size)
+
+        val alt1 = layout.streamingAlts[0]
+        assertEquals(1, alt1.altSetting)
+        assertEquals(2, alt1.channels)
+        assertEquals(4, alt1.subslotSize)
+        assertEquals(32, alt1.bitResolution)
+        assertEquals(776, alt1.maxPacketSize)
+        assertEquals(UsbSyncType.ASYNC, alt1.syncType)
+        assertTrue(alt1.sampleRates.isEmpty()) // UAC2: via clock RANGE
+        val fb = alt1.feedback!!
+        assertEquals(0x81, fb.address)
+        assertEquals(4, fb.maxPacketSize)      // Q16.16 at high speed
+        assertEquals(4, fb.interval)           // 2^(4-1) microframes = 1 ms
+        assertEquals(0, fb.refresh)            // 7-byte descriptor: no bRefresh
+
+        assertEquals(16, layout.streamingAlts[1].bitResolution)
+        assertEquals(388, layout.streamingAlts[1].maxPacketSize)
+        // alt3 is the DSD alt (bmFormats RAW_DATA) — bit depth parses as 32;
+        // format-tag awareness is a future refinement, the best-alt picker
+        // takes the FIRST highest-bits alt (alt1, PCM) either way.
+        assertEquals(32, layout.streamingAlts[2].bitResolution)
+
+        val vol = layout.volume!!
+        assertEquals(10, vol.unitId)           // OT#20 (Speaker) ← FU#10
+        assertTrue(vol.masterVolume)
+        assertTrue(vol.masterMute)
+        assertEquals(listOf(0), vol.writeChannels)
+
+        // 776 ≤ 1023 and no HS-only invariants — descriptors alone cannot
+        // prove high speed; that is exactly why GET_SPEED exists.
+        assertFalse(UsbAudioDescriptorParser.definitelyHighSpeed(ka17))
     }
 
     @Test

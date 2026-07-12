@@ -1,0 +1,871 @@
+
+Bus 002 Device 001: ID 2972:0093 FiiO Electronics Technology FIIO KA17
+Negotiated speed: High Speed (480Mbps)
+Device Descriptor:
+  bLength                18
+  bDescriptorType         1
+  bcdUSB               2.00
+  bDeviceClass          239 Miscellaneous Device
+  bDeviceSubClass         2 ?
+  bDeviceProtocol         1 Interface Association
+  bMaxPacketSize0        64
+  idVendor           0x2972 FiiO Electronics Technology
+  idProduct          0x0093 FIIO KA17
+  bcdDevice            2.25
+  iManufacturer           1 GuangZhou FIIO Electronics Co.,Ltd
+  iProduct                3 FIIO KA17
+  iSerial                 2 
+  bNumConfigurations      2
+  Configuration Descriptor:
+    bLength                 9
+    bDescriptorType         2
+    wTotalLength       0x0155
+    bNumInterfaces          5
+    bConfigurationValue     1
+    iConfiguration          0 
+    bmAttributes         0x80
+      (Bus Powered)
+    MaxPower                0mA
+    Interface Association:
+      bLength                 8
+      bDescriptorType        11
+      bFirstInterface         0
+      bInterfaceCount         2
+      bFunctionClass          1 Audio
+      bFunctionSubClass       0 
+      bFunctionProtocol      32 
+      iFunction               0 
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        0
+      bAlternateSetting       0
+      bNumEndpoints           0
+      bInterfaceClass         1 Audio
+      bInterfaceSubClass      1 Control Device
+      bInterfaceProtocol     32 
+      iInterface              3 FIIO KA17
+      AudioControl Interface Descriptor
+        bLength                 9
+        bDescriptorType        36
+        bDescriptorSubtype      1 (HEADER)
+        bcdADC               2.00
+        wTotalLength           72
+        bmControls           0x00
+      AudioControl Interface Descriptor
+        bLength                 8
+        bDescriptorType        36
+        bDescriptorSubtype     11 (CLOCK_SOURCE)
+        bClockID               41
+        bmAttributes         0x03
+          External
+          Internal fixed
+        bmControls           0x07
+          Clock Frequency Control (read/write)
+          Clock Validity Control (read-only)
+        bAssocTerminal          0
+        iClockSource            9 GuangZhou FIIO Electronics Co.,Ltd Internal Clock
+      AudioControl Interface Descriptor
+        bLength                 8
+        bDescriptorType        36
+        bDescriptorSubtype     12 (CLOCK_SELECTOR)
+        bClockID               40
+        bNrInPins               1
+        baCSourceID( 0)        41
+        bmControls           0x03
+          Clock Selector Control (read/write)
+        iClockSelector          8 GuangZhou FIIO Electronics Co.,Ltd Clock Selector
+      AudioControl Interface Descriptor
+        bLength                17
+        bDescriptorType        36
+        bDescriptorSubtype      2 (INPUT_TERMINAL)
+        bTerminalID             2
+        wTerminalType       0x101 USB Streaming
+        bAssocTerminal          0
+        bCSourceID             40
+        bNrChannels             2
+        bmChannelConfig 0x00000000
+        iChannelNames          11 Analogue 1
+        bmControls         0x0000
+        iTerminal               6 FIIO KA17 
+      AudioControl Interface Descriptor
+        bLength                18
+        bDescriptorType        36
+        bDescriptorSubtype      7 (FEATURE_UNIT)
+        bUnitID                10
+        bSourceID               2
+        bmaControls( 0)        15
+          Mute Control
+          Volume Control
+          Bass Control
+          Mid Control
+        bmaControls( 1)         0
+        bmaControls( 2)         0
+        bmaControls( 3)         0
+        iFeature                0 
+      AudioControl Interface Descriptor
+        bLength                12
+        bDescriptorType        36
+        bDescriptorSubtype      3 (OUTPUT_TERMINAL)
+        bTerminalID            20
+        wTerminalType       0x301 Speaker
+        bAssocTerminal          0
+        bSourceID              10
+        bCSourceID             40
+        bmControls         0x0000
+        iTerminal               0 
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        1
+      bAlternateSetting       0
+      bNumEndpoints           0
+      bInterfaceClass         1 Audio
+      bInterfaceSubClass      2 Streaming
+      bInterfaceProtocol     32 
+      iInterface              4 FIIO KA17 
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        1
+      bAlternateSetting       1
+      bNumEndpoints           2
+      bInterfaceClass         1 Audio
+      bInterfaceSubClass      2 Streaming
+      bInterfaceProtocol     32 
+      iInterface              4 FIIO KA17 
+      AudioStreaming Interface Descriptor:
+        bLength                16
+        bDescriptorType        36
+        bDescriptorSubtype      1 (GENERAL)
+        bTerminalLink           2
+        bmControls           0x00
+        bFormatType             1
+        bNrChannels             2
+        bmChannelConfig 0x00000000
+        iChannelNames          11 Analogue 1
+      AudioStreaming Interface Descriptor:
+        bLength                 6
+        bDescriptorType        36
+        bDescriptorSubtype      2 (FORMAT_TYPE)
+        bFormatType             1 (FORMAT_TYPE_I)
+        bSubslotSize            4
+        bBitResolution         32
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x01 EP 1 OUT
+        bmAttributes            5
+          Transfer Type          Isochronous
+          Synch Type             Asynchronous
+          Usage Type             Data
+        wMaxPacketSize     0x0308 1x 776 bytes
+        bInterval               1
+        AudioStreaming Endpoint Descriptor:
+          bLength                 8
+          bDescriptorType        37
+          bDescriptorSubtype      1 (EP_GENERAL)
+          bmAttributes         0x00
+          bmControls           0x00
+          bLockDelayUnits         2
+          wLockDelay              8
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x81 EP 1 IN
+        bmAttributes           17
+          Transfer Type          Isochronous
+          Synch Type             None
+          Usage Type             Feedback
+        wMaxPacketSize     0x0004 1x 4 bytes
+        bInterval               4
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        1
+      bAlternateSetting       2
+      bNumEndpoints           2
+      bInterfaceClass         1 Audio
+      bInterfaceSubClass      2 Streaming
+      bInterfaceProtocol     32 
+      iInterface              4 FIIO KA17 
+      AudioStreaming Interface Descriptor:
+        bLength                16
+        bDescriptorType        36
+        bDescriptorSubtype      1 (GENERAL)
+        bTerminalLink           2
+        bmControls           0x00
+        bFormatType             1
+        bNrChannels             2
+        bmChannelConfig 0x00000000
+        iChannelNames          11 Analogue 1
+      AudioStreaming Interface Descriptor:
+        bLength                 6
+        bDescriptorType        36
+        bDescriptorSubtype      2 (FORMAT_TYPE)
+        bFormatType             1 (FORMAT_TYPE_I)
+        bSubslotSize            2
+        bBitResolution         16
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x01 EP 1 OUT
+        bmAttributes            5
+          Transfer Type          Isochronous
+          Synch Type             Asynchronous
+          Usage Type             Data
+        wMaxPacketSize     0x0184 1x 388 bytes
+        bInterval               1
+        AudioStreaming Endpoint Descriptor:
+          bLength                 8
+          bDescriptorType        37
+          bDescriptorSubtype      1 (EP_GENERAL)
+          bmAttributes         0x00
+          bmControls           0x00
+          bLockDelayUnits         2
+          wLockDelay              8
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x81 EP 1 IN
+        bmAttributes           17
+          Transfer Type          Isochronous
+          Synch Type             None
+          Usage Type             Feedback
+        wMaxPacketSize     0x0004 1x 4 bytes
+        bInterval               4
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        1
+      bAlternateSetting       3
+      bNumEndpoints           2
+      bInterfaceClass         1 Audio
+      bInterfaceSubClass      2 Streaming
+      bInterfaceProtocol     32 
+      iInterface              4 FIIO KA17 
+      AudioStreaming Interface Descriptor:
+        bLength                16
+        bDescriptorType        36
+        bDescriptorSubtype      1 (GENERAL)
+        bTerminalLink           2
+        bmControls           0x00
+        bFormatType             1
+        bNrChannels             2
+        bmChannelConfig 0x00000000
+        iChannelNames          11 Analogue 1
+      AudioStreaming Interface Descriptor:
+        bLength                 6
+        bDescriptorType        36
+        bDescriptorSubtype      2 (FORMAT_TYPE)
+        bFormatType             1 (FORMAT_TYPE_I)
+        bSubslotSize            4
+        bBitResolution         32
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x01 EP 1 OUT
+        bmAttributes            5
+          Transfer Type          Isochronous
+          Synch Type             Asynchronous
+          Usage Type             Data
+        wMaxPacketSize     0x0308 1x 776 bytes
+        bInterval               1
+        AudioStreaming Endpoint Descriptor:
+          bLength                 8
+          bDescriptorType        37
+          bDescriptorSubtype      1 (EP_GENERAL)
+          bmAttributes         0x00
+          bmControls           0x00
+          bLockDelayUnits         2
+          wLockDelay              8
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x81 EP 1 IN
+        bmAttributes           17
+          Transfer Type          Isochronous
+          Synch Type             None
+          Usage Type             Feedback
+        wMaxPacketSize     0x0004 1x 4 bytes
+        bInterval               4
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        2
+      bAlternateSetting       0
+      bNumEndpoints           0
+      bInterfaceClass       254 Application Specific Interface
+      bInterfaceSubClass      1 Device Firmware Update
+      bInterfaceProtocol      1 
+      iInterface             10 GuangZhou FIIO Electronics Co.,Ltd DFU
+        Device Firmware Upgrade Interface Descriptor:
+          bLength                 9
+          bDescriptorType        33
+          bmAttributes            7
+            Will Not Detach
+            Manifestation Intolerant
+            Upload Supported
+            Download Supported
+          wDetachTimeout        250 milliseconds
+          wTransferSize          64 bytes
+          bcdDFUVersion        1.10
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        3
+      bAlternateSetting       0
+      bNumEndpoints           1
+      bInterfaceClass         3 Human Interface Device
+      bInterfaceSubClass      0 No Subclass
+      bInterfaceProtocol      0 None
+      iInterface             14 FIIO KA17 (MQA HID)
+        HID Device Descriptor:
+          bLength                 9
+          bDescriptorType        33
+          bcdHID               1.10
+          bCountryCode            0 Not supported
+          bNumDescriptors         1
+          bDescriptorType        34 Report
+          wDescriptorLength      21
+          Report Descriptor: (length is 21)
+            Item(Global): Usage Page, data= [ 00 ff ] 65280
+            Undefined
+            Item( Local): Usage, data= [ 01 ] 1
+            Item(  Main): Collection, data= [ 01 ] 1
+            Application
+            Item(Global): Logical Minimum, data= [ 00 ] 0
+            Item(Global): Logical Maximum, data= [ ff 00 ] 255
+            Item(Global): Report Size, data= [ 08 ] 8
+            Item(Global): Report Count, data= [ 40 ] 64
+            Item( Local): Usage, data= [ 01 ] 1
+            Item(  Main): Feature, data= [ 01 ] 1
+            Constant Array Absolute No_Wrap Linear
+            Preferred_State No_Null_Position Non_Volatile Bitfield
+            Item(  Main): End Collection, data=none
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x83 EP 3 IN
+        bmAttributes            3
+          Transfer Type          Interrupt
+          Synch Type             None
+          Usage Type             Data
+        wMaxPacketSize     0x0040 1x 64 bytes
+        bInterval               8
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        4
+      bAlternateSetting       0
+      bNumEndpoints           2
+      bInterfaceClass         3 Human Interface Device
+      bInterfaceSubClass      0 No Subclass
+      bInterfaceProtocol      0 None
+      iInterface              6 FIIO KA17 
+        HID Device Descriptor:
+          bLength                 9
+          bDescriptorType        33
+          bcdHID               1.11
+          bCountryCode            0 Not supported
+          bNumDescriptors         1
+          bDescriptorType        34 Report
+          wDescriptorLength      64
+          Report Descriptor: (length is 64)
+            Item(Global): Usage Page, data= [ 01 ] 1
+            Generic Desktop Controls
+            Item( Local): Usage, data= [ 00 ] 0
+            Item(  Main): Collection, data= [ 01 ] 1
+            Application
+            Item(Global): Report ID, data= [ 01 ] 1
+            Item(Global): Logical Minimum, data= [ 00 ] 0
+            Item(Global): Logical Maximum, data= [ ff ] 255
+            Item( Local): Usage Minimum, data= [ 01 ] 1
+            Item( Local): Usage Maximum, data= [ 08 ] 8
+            Item(Global): Report Count, data= [ 20 ] 32
+            Item(Global): Report Size, data= [ 08 ] 8
+            Item(  Main): Input, data= [ 02 ] 2
+            Data Variable Absolute No_Wrap Linear
+            Preferred_State No_Null_Position Non_Volatile Bitfield
+            Item( Local): Usage Minimum, data= [ 01 ] 1
+            Item( Local): Usage Maximum, data= [ 08 ] 8
+            Item(  Main): Output, data= [ 02 ] 2
+            Data Variable Absolute No_Wrap Linear
+            Preferred_State No_Null_Position Non_Volatile Bitfield
+            Item(  Main): End Collection, data=none
+            Item(Global): Usage Page, data= [ 0c ] 12
+            Consumer
+            Item( Local): Usage, data= [ 01 ] 1
+            Item(  Main): Collection, data= [ 01 ] 1
+            Application
+            Item(Global): Report ID, data= [ 02 ] 2
+            Item(Global): Logical Minimum, data= [ 00 ] 0
+            Item(Global): Logical Maximum, data= [ 01 ] 1
+            Item( Local): Usage, data= [ cd ] 205
+            Item( Local): Usage, data= [ b5 ] 181
+            Item( Local): Usage, data= [ b6 ] 182
+            Item( Local): Usage, data= [ e9 ] 233
+            Item( Local): Usage, data= [ ea ] 234
+            Item( Local): Usage, data= [ e2 ] 226
+            Item(Global): Report Size, data= [ 01 ] 1
+            Item(Global): Report Count, data= [ 06 ] 6
+            Item(  Main): Input, data= [ 02 ] 2
+            Data Variable Absolute No_Wrap Linear
+            Preferred_State No_Null_Position Non_Volatile Bitfield
+            Item(Global): Report Count, data= [ 02 ] 2
+            Item(  Main): Input, data= [ 01 ] 1
+            Constant Array Absolute No_Wrap Linear
+            Preferred_State No_Null_Position Non_Volatile Bitfield
+            Item(  Main): End Collection, data=none
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x84 EP 4 IN
+        bmAttributes            3
+          Transfer Type          Interrupt
+          Synch Type             None
+          Usage Type             Data
+        wMaxPacketSize     0x0040 1x 64 bytes
+        bInterval               8
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x02 EP 2 OUT
+        bmAttributes            3
+          Transfer Type          Interrupt
+          Synch Type             None
+          Usage Type             Data
+        wMaxPacketSize     0x0040 1x 64 bytes
+        bInterval               8
+  Configuration Descriptor:
+    bLength                 9
+    bDescriptorType         2
+    wTotalLength       0x0155
+    bNumInterfaces          5
+    bConfigurationValue     1
+    iConfiguration          0 
+    bmAttributes         0x80
+      (Bus Powered)
+    MaxPower                0mA
+    Interface Association:
+      bLength                 8
+      bDescriptorType        11
+      bFirstInterface         0
+      bInterfaceCount         2
+      bFunctionClass          1 Audio
+      bFunctionSubClass       0 
+      bFunctionProtocol      32 
+      iFunction               0 
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        0
+      bAlternateSetting       0
+      bNumEndpoints           0
+      bInterfaceClass         1 Audio
+      bInterfaceSubClass      1 Control Device
+      bInterfaceProtocol     32 
+      iInterface              3 FIIO KA17
+      AudioControl Interface Descriptor
+        bLength                 9
+        bDescriptorType        36
+        bDescriptorSubtype      1 (HEADER)
+        bcdADC               2.00
+        wTotalLength           72
+        bmControls           0x00
+      AudioControl Interface Descriptor
+        bLength                 8
+        bDescriptorType        36
+        bDescriptorSubtype     11 (CLOCK_SOURCE)
+        bClockID               41
+        bmAttributes         0x03
+          External
+          Internal fixed
+        bmControls           0x07
+          Clock Frequency Control (read/write)
+          Clock Validity Control (read-only)
+        bAssocTerminal          0
+        iClockSource            9 GuangZhou FIIO Electronics Co.,Ltd Internal Clock
+      AudioControl Interface Descriptor
+        bLength                 8
+        bDescriptorType        36
+        bDescriptorSubtype     12 (CLOCK_SELECTOR)
+        bClockID               40
+        bNrInPins               1
+        baCSourceID( 0)        41
+        bmControls           0x03
+          Clock Selector Control (read/write)
+        iClockSelector          8 GuangZhou FIIO Electronics Co.,Ltd Clock Selector
+      AudioControl Interface Descriptor
+        bLength                17
+        bDescriptorType        36
+        bDescriptorSubtype      2 (INPUT_TERMINAL)
+        bTerminalID             2
+        wTerminalType       0x101 USB Streaming
+        bAssocTerminal          0
+        bCSourceID             40
+        bNrChannels             2
+        bmChannelConfig 0x00000000
+        iChannelNames          11 Analogue 1
+        bmControls         0x0000
+        iTerminal               6 FIIO KA17 
+      AudioControl Interface Descriptor
+        bLength                18
+        bDescriptorType        36
+        bDescriptorSubtype      7 (FEATURE_UNIT)
+        bUnitID                10
+        bSourceID               2
+        bmaControls( 0)        15
+          Mute Control
+          Volume Control
+          Bass Control
+          Mid Control
+        bmaControls( 1)         0
+        bmaControls( 2)         0
+        bmaControls( 3)         0
+        iFeature                0 
+      AudioControl Interface Descriptor
+        bLength                12
+        bDescriptorType        36
+        bDescriptorSubtype      3 (OUTPUT_TERMINAL)
+        bTerminalID            20
+        wTerminalType       0x301 Speaker
+        bAssocTerminal          0
+        bSourceID              10
+        bCSourceID             40
+        bmControls         0x0000
+        iTerminal               0 
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        1
+      bAlternateSetting       0
+      bNumEndpoints           0
+      bInterfaceClass         1 Audio
+      bInterfaceSubClass      2 Streaming
+      bInterfaceProtocol     32 
+      iInterface              4 FIIO KA17 
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        1
+      bAlternateSetting       1
+      bNumEndpoints           2
+      bInterfaceClass         1 Audio
+      bInterfaceSubClass      2 Streaming
+      bInterfaceProtocol     32 
+      iInterface              4 FIIO KA17 
+      AudioStreaming Interface Descriptor:
+        bLength                16
+        bDescriptorType        36
+        bDescriptorSubtype      1 (GENERAL)
+        bTerminalLink           2
+        bmControls           0x00
+        bFormatType             1
+        bNrChannels             2
+        bmChannelConfig 0x00000000
+        iChannelNames          11 Analogue 1
+      AudioStreaming Interface Descriptor:
+        bLength                 6
+        bDescriptorType        36
+        bDescriptorSubtype      2 (FORMAT_TYPE)
+        bFormatType             1 (FORMAT_TYPE_I)
+        bSubslotSize            4
+        bBitResolution         32
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x01 EP 1 OUT
+        bmAttributes            5
+          Transfer Type          Isochronous
+          Synch Type             Asynchronous
+          Usage Type             Data
+        wMaxPacketSize     0x0308 1x 776 bytes
+        bInterval               1
+        AudioStreaming Endpoint Descriptor:
+          bLength                 8
+          bDescriptorType        37
+          bDescriptorSubtype      1 (EP_GENERAL)
+          bmAttributes         0x00
+          bmControls           0x00
+          bLockDelayUnits         2
+          wLockDelay              8
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x81 EP 1 IN
+        bmAttributes           17
+          Transfer Type          Isochronous
+          Synch Type             None
+          Usage Type             Feedback
+        wMaxPacketSize     0x0004 1x 4 bytes
+        bInterval               4
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        1
+      bAlternateSetting       2
+      bNumEndpoints           2
+      bInterfaceClass         1 Audio
+      bInterfaceSubClass      2 Streaming
+      bInterfaceProtocol     32 
+      iInterface              4 FIIO KA17 
+      AudioStreaming Interface Descriptor:
+        bLength                16
+        bDescriptorType        36
+        bDescriptorSubtype      1 (GENERAL)
+        bTerminalLink           2
+        bmControls           0x00
+        bFormatType             1
+        bNrChannels             2
+        bmChannelConfig 0x00000000
+        iChannelNames          11 Analogue 1
+      AudioStreaming Interface Descriptor:
+        bLength                 6
+        bDescriptorType        36
+        bDescriptorSubtype      2 (FORMAT_TYPE)
+        bFormatType             1 (FORMAT_TYPE_I)
+        bSubslotSize            2
+        bBitResolution         16
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x01 EP 1 OUT
+        bmAttributes            5
+          Transfer Type          Isochronous
+          Synch Type             Asynchronous
+          Usage Type             Data
+        wMaxPacketSize     0x0184 1x 388 bytes
+        bInterval               1
+        AudioStreaming Endpoint Descriptor:
+          bLength                 8
+          bDescriptorType        37
+          bDescriptorSubtype      1 (EP_GENERAL)
+          bmAttributes         0x00
+          bmControls           0x00
+          bLockDelayUnits         2
+          wLockDelay              8
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x81 EP 1 IN
+        bmAttributes           17
+          Transfer Type          Isochronous
+          Synch Type             None
+          Usage Type             Feedback
+        wMaxPacketSize     0x0004 1x 4 bytes
+        bInterval               4
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        1
+      bAlternateSetting       3
+      bNumEndpoints           2
+      bInterfaceClass         1 Audio
+      bInterfaceSubClass      2 Streaming
+      bInterfaceProtocol     32 
+      iInterface              4 FIIO KA17 
+      AudioStreaming Interface Descriptor:
+        bLength                16
+        bDescriptorType        36
+        bDescriptorSubtype      1 (GENERAL)
+        bTerminalLink           2
+        bmControls           0x00
+        bFormatType             1
+        bNrChannels             2
+        bmChannelConfig 0x00000000
+        iChannelNames          11 Analogue 1
+      AudioStreaming Interface Descriptor:
+        bLength                 6
+        bDescriptorType        36
+        bDescriptorSubtype      2 (FORMAT_TYPE)
+        bFormatType             1 (FORMAT_TYPE_I)
+        bSubslotSize            4
+        bBitResolution         32
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x01 EP 1 OUT
+        bmAttributes            5
+          Transfer Type          Isochronous
+          Synch Type             Asynchronous
+          Usage Type             Data
+        wMaxPacketSize     0x0308 1x 776 bytes
+        bInterval               1
+        AudioStreaming Endpoint Descriptor:
+          bLength                 8
+          bDescriptorType        37
+          bDescriptorSubtype      1 (EP_GENERAL)
+          bmAttributes         0x00
+          bmControls           0x00
+          bLockDelayUnits         2
+          wLockDelay              8
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x81 EP 1 IN
+        bmAttributes           17
+          Transfer Type          Isochronous
+          Synch Type             None
+          Usage Type             Feedback
+        wMaxPacketSize     0x0004 1x 4 bytes
+        bInterval               4
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        2
+      bAlternateSetting       0
+      bNumEndpoints           0
+      bInterfaceClass       254 Application Specific Interface
+      bInterfaceSubClass      1 Device Firmware Update
+      bInterfaceProtocol      1 
+      iInterface             10 GuangZhou FIIO Electronics Co.,Ltd DFU
+        Device Firmware Upgrade Interface Descriptor:
+          bLength                 9
+          bDescriptorType        33
+          bmAttributes            7
+            Will Not Detach
+            Manifestation Intolerant
+            Upload Supported
+            Download Supported
+          wDetachTimeout        250 milliseconds
+          wTransferSize          64 bytes
+          bcdDFUVersion        1.10
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        3
+      bAlternateSetting       0
+      bNumEndpoints           1
+      bInterfaceClass         3 Human Interface Device
+      bInterfaceSubClass      0 No Subclass
+      bInterfaceProtocol      0 None
+      iInterface             14 FIIO KA17 (MQA HID)
+        HID Device Descriptor:
+          bLength                 9
+          bDescriptorType        33
+          bcdHID               1.10
+          bCountryCode            0 Not supported
+          bNumDescriptors         1
+          bDescriptorType        34 Report
+          wDescriptorLength      21
+          Report Descriptor: (length is 21)
+            Item(Global): Usage Page, data= [ 00 ff ] 65280
+            Undefined
+            Item( Local): Usage, data= [ 01 ] 1
+            Item(  Main): Collection, data= [ 01 ] 1
+            Application
+            Item(Global): Logical Minimum, data= [ 00 ] 0
+            Item(Global): Logical Maximum, data= [ ff 00 ] 255
+            Item(Global): Report Size, data= [ 08 ] 8
+            Item(Global): Report Count, data= [ 40 ] 64
+            Item( Local): Usage, data= [ 01 ] 1
+            Item(  Main): Feature, data= [ 01 ] 1
+            Constant Array Absolute No_Wrap Linear
+            Preferred_State No_Null_Position Non_Volatile Bitfield
+            Item(  Main): End Collection, data=none
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x83 EP 3 IN
+        bmAttributes            3
+          Transfer Type          Interrupt
+          Synch Type             None
+          Usage Type             Data
+        wMaxPacketSize     0x0040 1x 64 bytes
+        bInterval               8
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        4
+      bAlternateSetting       0
+      bNumEndpoints           2
+      bInterfaceClass         3 Human Interface Device
+      bInterfaceSubClass      0 No Subclass
+      bInterfaceProtocol      0 None
+      iInterface              6 FIIO KA17 
+        HID Device Descriptor:
+          bLength                 9
+          bDescriptorType        33
+          bcdHID               1.11
+          bCountryCode            0 Not supported
+          bNumDescriptors         1
+          bDescriptorType        34 Report
+          wDescriptorLength      64
+          Report Descriptor: (length is 64)
+            Item(Global): Usage Page, data= [ 01 ] 1
+            Generic Desktop Controls
+            Item( Local): Usage, data= [ 00 ] 0
+            Item(  Main): Collection, data= [ 01 ] 1
+            Application
+            Item(Global): Report ID, data= [ 01 ] 1
+            Item(Global): Logical Minimum, data= [ 00 ] 0
+            Item(Global): Logical Maximum, data= [ ff ] 255
+            Item( Local): Usage Minimum, data= [ 01 ] 1
+            Item( Local): Usage Maximum, data= [ 08 ] 8
+            Item(Global): Report Count, data= [ 20 ] 32
+            Item(Global): Report Size, data= [ 08 ] 8
+            Item(  Main): Input, data= [ 02 ] 2
+            Data Variable Absolute No_Wrap Linear
+            Preferred_State No_Null_Position Non_Volatile Bitfield
+            Item( Local): Usage Minimum, data= [ 01 ] 1
+            Item( Local): Usage Maximum, data= [ 08 ] 8
+            Item(  Main): Output, data= [ 02 ] 2
+            Data Variable Absolute No_Wrap Linear
+            Preferred_State No_Null_Position Non_Volatile Bitfield
+            Item(  Main): End Collection, data=none
+            Item(Global): Usage Page, data= [ 0c ] 12
+            Consumer
+            Item( Local): Usage, data= [ 01 ] 1
+            Item(  Main): Collection, data= [ 01 ] 1
+            Application
+            Item(Global): Report ID, data= [ 02 ] 2
+            Item(Global): Logical Minimum, data= [ 00 ] 0
+            Item(Global): Logical Maximum, data= [ 01 ] 1
+            Item( Local): Usage, data= [ cd ] 205
+            Item( Local): Usage, data= [ b5 ] 181
+            Item( Local): Usage, data= [ b6 ] 182
+            Item( Local): Usage, data= [ e9 ] 233
+            Item( Local): Usage, data= [ ea ] 234
+            Item( Local): Usage, data= [ e2 ] 226
+            Item(Global): Report Size, data= [ 01 ] 1
+            Item(Global): Report Count, data= [ 06 ] 6
+            Item(  Main): Input, data= [ 02 ] 2
+            Data Variable Absolute No_Wrap Linear
+            Preferred_State No_Null_Position Non_Volatile Bitfield
+            Item(Global): Report Count, data= [ 02 ] 2
+            Item(  Main): Input, data= [ 01 ] 1
+            Constant Array Absolute No_Wrap Linear
+            Preferred_State No_Null_Position Non_Volatile Bitfield
+            Item(  Main): End Collection, data=none
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x84 EP 4 IN
+        bmAttributes            3
+          Transfer Type          Interrupt
+          Synch Type             None
+          Usage Type             Data
+        wMaxPacketSize     0x0040 1x 64 bytes
+        bInterval               8
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x02 EP 2 OUT
+        bmAttributes            3
+          Transfer Type          Interrupt
+          Synch Type             None
+          Usage Type             Data
+        wMaxPacketSize     0x0040 1x 64 bytes
+        bInterval               8
+Device Qualifier (for other device speed):
+  bLength                10
+  bDescriptorType         6
+  bcdUSB               2.00
+  bDeviceClass          239 Miscellaneous Device
+  bDeviceSubClass         2 ?
+  bDeviceProtocol         1 Interface Association
+  bMaxPacketSize0        64
+  bNumConfigurations      2
+Device Status:     0x0000
+  (Bus Powered)

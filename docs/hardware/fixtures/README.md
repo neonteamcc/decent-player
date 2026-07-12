@@ -13,6 +13,7 @@ is reconstructed; each file states its source.
 | `dragonfly-black15-21b4-0083-lsusb.txt` | AudioQuest DragonFly Black v1.5 | 21b4:0083 | UAC1 **explicit async**: data EP bmAttributes 5 + `bSynchAddress 0x81`, 3-byte iso IN **feedback EP with bRefresh 5** (32 ms), 24-bit/`bSubframeSize 3`, 4 rates |
 | `cmedia-cm108-0d8c-013c-lsusb.txt` | C-Media CM108 dongle | 0d8c:013c | UAC1 **adaptive** (bmAttributes 9), bcdUSB 1.10, multi-collection AC (mixer/selector units), mono capture alt |
 | `realtek-alc4040-0bda-4040-lsusb.txt` | Realtek ALC4040 USB-C dongle | 0bda:4040 | UAC1 with **one-rate-per-alt-setting** (`bSamFreqType 1`), adaptive OUT; caveat: this probe enumerated at high speed (bInterval 4, Device Qualifier present) |
+| `fiio-ka17-2972-0093-lsusb.txt` + `-rawdescriptors.txt` | **FiiO KA17** (cyme/lsusb text + REAL raw bytes via pyusb on macOS) | 2972:0093 | High-speed UAC2 reference: clock source 0x29 behind selector 0x28, FU#10 **master Mute+Volume**, alts 32-bit PCM / 16-bit PCM / **DSD** (bmFormats 0x80000000), 4-byte async feedback with usage bits. The parser test runs on these exact bytes |
 | `apple-usbc-35mm-05ac-110a-lsusb.txt` | Apple USB-C→3.5 mm adapter | 05ac:110a | **Negative fixture**: NOT UAC1 — 3 configurations: config 1 = UAC2 (bcdADC 2.00, protocol 0x20, clock source ID 9), configs 2/3 = UAC3/BADD (protocol 0x30). All data EPs **synchronous** (bmAttributes 13), no feedback. A UAC1 parser must reject it; the UAC2 parser must handle it at full speed |
 
 Parser edge cases covered across the set: 9-byte vs 7-byte endpoint
