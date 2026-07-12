@@ -130,6 +130,25 @@ class UsbAudioDescriptorParserTest {
             "09 21 11 01 00 01 22 40 00 07 05 84 03 40 00 08 07 05 02 03 40 00 08",
     )
 
+    // ── KM-HIFI-384KHZ dongle (3302:3366, TTGK) — Thesycon dump.
+    //    High-speed UAC2 × SYNCHRONOUS (bmAttributes 0x0D, no feedback
+    //    EP — SOF-locked): the nominal-pacing sink combination. FU#2 is
+    //    the per-channel-volume layout (master carries only Mute). ─────
+    private val kmHifi = hex(
+            "12 01 01 02 EF 02 01 40 02 33 66 33 01 00 01 02 00 01 09 02 0E 01 03 01",
+            "04 A0 32 08 0B 00 02 01 00 20 00 09 04 00 00 00 01 01 20 00 09 24 01 00",
+            "02 04 40 00 00 08 24 0A 09 03 07 00 00 11 24 02 01 01 01 00 09 02 03 00",
+            "00 00 00 00 00 00 12 24 06 02 01 03 00 00 00 0C 00 00 00 0C 00 00 00 00",
+            "0C 24 03 03 02 03 00 02 09 00 00 00 09 04 01 00 00 01 02 20 00 09 04 01",
+            "01 01 01 02 20 00 10 24 01 01 00 01 01 00 00 00 02 03 00 00 00 00 06 24",
+            "02 01 02 10 07 05 01 0D C0 00 01 08 25 01 00 00 02 02 00 09 04 01 02 01",
+            "01 02 20 00 10 24 01 01 00 01 01 00 00 00 02 03 00 00 00 00 06 24 02 01",
+            "03 18 07 05 01 0D 20 01 01 08 25 01 00 00 02 02 00 09 04 01 03 01 01 02",
+            "20 00 10 24 01 01 00 01 01 00 00 00 02 03 00 00 00 00 06 24 02 01 04 20",
+            "07 05 01 0D 80 01 01 08 25 01 00 00 02 02 00 08 0B 02 01 03 00 00 00 09",
+            "04 02 00 01 03 00 00 00 09 21 11 01 00 01 22 3F 00 07 05 83 03 40 00 07",
+    )
+
     @Test
     fun btr13_parsesAsUac1FullLayout() {
         val layout = UsbAudioDescriptorParser.parse(btr13)
@@ -347,6 +366,30 @@ class UsbAudioDescriptorParserTest {
         // 776 ≤ 1023 and no HS-only invariants — descriptors alone cannot
         // prove high speed; that is exactly why GET_SPEED exists.
         assertFalse(UsbAudioDescriptorParser.definitelyHighSpeed(ka17))
+    }
+
+    @Test
+    fun kmHifi_parsesSynchronousUac2WithPerChannelVolume() {
+        val layout = UsbAudioDescriptorParser.parse(kmHifi)!!
+        assertEquals(UacVersion.UAC2, layout.uacVersion)
+        assertEquals(9, layout.clockSourceId)
+        assertEquals(3, layout.streamingAlts.size)
+
+        val bits = layout.streamingAlts.map { it.bitResolution }
+        assertEquals(listOf(16, 24, 32), bits)
+        val pkts = layout.streamingAlts.map { it.maxPacketSize }
+        assertEquals(listOf(192, 288, 384), pkts)
+        for (alt in layout.streamingAlts) {
+            assertEquals(UsbSyncType.SYNC, alt.syncType)
+            assertNull(alt.feedback)          // SOF-locked: nominal pacing
+            assertFalse(alt.syncType.needsFeedback)
+        }
+
+        val vol = layout.volume!!
+        assertEquals(2, vol.unitId)           // OT#3 (Headphones) ← FU#2
+        assertFalse(vol.masterVolume)         // master carries only Mute
+        assertTrue(vol.masterMute)
+        assertEquals(listOf(1, 2), vol.writeChannels)
     }
 
     @Test
