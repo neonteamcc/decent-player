@@ -22,6 +22,10 @@ set(CMAKE_CXX_STANDARD 11)
 # Define project name for your JNI module
 project(libflacJNI C CXX)
 
+# Size hygiene (applies to libFLAC below too): only JNIEXPORT symbols stay
+# in dynsym, unreferenced sections drop at link.
+add_compile_options(-ffunction-sections -fdata-sections -fvisibility=hidden)
+
 set(libflac_jni_root "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # Build libflac.
@@ -45,3 +49,6 @@ target_link_libraries(flacJNI
                       PRIVATE android
                       PRIVATE FLAC
                       PRIVATE ${android_log_lib})
+target_link_options(flacJNI PRIVATE
+                    -Wl,--gc-sections
+                    -Wl,--exclude-libs,ALL)

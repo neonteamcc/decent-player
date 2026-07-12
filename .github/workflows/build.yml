@@ -50,6 +50,18 @@ jobs:
         working-directory: libs
         run: ./gradlew --no-daemon assembleRelease
 
+      - name: Report artifact sizes
+        run: |
+          {
+            echo '### AAR / native sizes'
+            echo '```'
+            ls -l libs/*/build/outputs/aar/*-release.aar | awk '{printf "%8d  %s\n", $5, $NF}'
+            for aar in libs/*/build/outputs/aar/*-release.aar; do
+              unzip -l "$aar" | awk -v a="$aar" '/\.so$/ {printf "%8d  %s!%s\n", $1, a, $4}'
+            done
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload release AARs
         uses: actions/upload-artifact@v4
         with:
