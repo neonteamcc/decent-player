@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   libs:
     runs-on: ubuntu-latest
@@ -52,6 +56,17 @@ jobs:
           name: release-aars
           path: libs/*/build/outputs/aar/*-release.aar
           if-no-files-found: error
+
+      # Maven-consumable copies of the same AARs. GitHub Packages requires
+      # auth even for public reads — consumers use a PAT with read:packages.
+      - name: Publish to GitHub Packages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/full-speed-uac1'
+        working-directory: libs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./gradlew --no-daemon -PpublishVersion=0.1.${{ github.run_number }} publish
+          echo "Published \`cc.neonteam.decent:*:0.1.${{ github.run_number }}\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload test reports on failure
         if: failure()
