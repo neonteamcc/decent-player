@@ -314,6 +314,21 @@ class UsbAudioDevice private constructor(private val context: Context) {
         Log.i(TAG, "Auto-detected: clockSourceId=0x${clockSourceId.toString(16)}, " +
                 "bestAlt=$bestAlt, bestBits=$bestBits")
 
+        // The endpoint scan above captured geometry from the FIRST alt that
+        // has endpoints — not necessarily the alt we stream on. Fosi DS2:
+        // alt1 (16-bit) has wMaxPacketSize=200 while streaming runs on alt3
+        // (32-bit, 400) — the 200-byte packet clamp then starves ≥176.4 kHz.
+        // Take the CHOSEN alt's endpoint geometry from the parsed layout;
+        // the scan value stays as the fallback when parsing failed.
+        val chosenAlt = layout?.streamingAlts?.firstOrNull { it.altSetting == bestAlt }
+        if (chosenAlt != null && chosenAlt.maxPacketSize > 0) {
+            if (chosenAlt.maxPacketSize != maxPacketSize) {
+                Log.i(TAG, "maxPacket corrected: $maxPacketSize (first-alt scan) -> " +
+                        "${chosenAlt.maxPacketSize} (alt=$bestAlt)")
+            }
+            maxPacketSize = chosenAlt.maxPacketSize
+        }
+
         val info = UsbAudioDeviceInfo(
                 connection = conn,
                 fd = fd,
@@ -637,8 +652,12 @@ class UsbAudioDevice private constructor(private val context: Context) {
                     0x10, 0x11, 0x12, 0x20, 0x21, 0x22)
         }
 
+        // The AC interface number is NOT always 0: the Fosi DS2 puts HID at
+        // interface 0 and AudioControl at 1 — a request addressed to
+        // interface 0 stalls and the DAC never leaves its power-on rate.
+        val acInterface = cachedDeviceInfo?.layout?.controlInterfaceId ?: 0
         for (csId in clockSourceIds) {
-            val wIndex = (csId shl 8) or 0  // entityId << 8 | audioControlInterface(0)
+            val wIndex = (csId shl 8) or acInterface  // entityId << 8 | acInterface
             val ret = conn.controlTransfer(
                     0x21,    // bmRequestType: Host-to-Device, Class, Interface
                     0x01,    // bRequest: SET_CUR
@@ -688,8 +707,10 @@ class UsbAudioDevice private constructor(private val context: Context) {
         val detectedId = cachedDeviceInfo?.clockSourceId ?: -1
         val clockSourceIds = if (detectedId > 0) intArrayOf(detectedId)
                 else intArrayOf(0x05, 0x09, 0x0A, 0x0B, 0x0C, 0x28, 0x29)
+        // Not always 0 — see setSampleRate (Fosi DS2: HID at 0, AC at 1).
+        val acInterface = cachedDeviceInfo?.layout?.controlInterfaceId ?: 0
         for (csId in clockSourceIds) {
-            val wIndex = (csId shl 8) or 0
+            val wIndex = (csId shl 8) or acInterface
             val ret = conn.controlTransfer(
                     0xA1,    // bmRequestType: Device-to-Host, Class, Interface
                     0x01,    // bRequest: GET_CUR (actually CUR is 0x01 for both)
@@ -734,8 +755,10 @@ class UsbAudioDevice private constructor(private val context: Context) {
         val detectedId = cachedDeviceInfo?.clockSourceId ?: -1
         val clockSourceIds = if (detectedId > 0) intArrayOf(detectedId)
                 else intArrayOf(0x05, 0x09, 0x0A, 0x0B, 0x0C, 0x28, 0x29)
+        // Not always 0 — see setSampleRate (Fosi DS2: HID at 0, AC at 1).
+        val acInterface = cachedDeviceInfo?.layout?.controlInterfaceId ?: 0
         for (csId in clockSourceIds) {
-            val wIndex = (csId shl 8) or 0
+            val wIndex = (csId shl 8) or acInterface
             val ret = conn.controlTransfer(
                     0xA1,    // bmRequestType: Device-to-Host, Class, Interface
                     0x01,    // bRequest: GET_CUR
