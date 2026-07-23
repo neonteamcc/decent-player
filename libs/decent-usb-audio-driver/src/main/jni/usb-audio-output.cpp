@@ -588,6 +588,17 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioStart(
         JNIEnv *, jobject, jlong h) {
     auto *ctx = reinterpret_cast<UsbAudioContext *>(h);
     if (!ctx) return JNI_FALSE;
+    // A re-start without an intervening drain (pause → play) must not zero
+    // the books while the kernel still owns the previous run's URBs: those
+    // exact URB pointers are then re-submitted and every SUBMITURB fails
+    // with EBUSY, killing the stream (field-confirmed on Fosi DS2). Reap/
+    // discard leftovers FIRST — drainAllUrbs also resets the ring indices
+    // and the feedback in-flight flag.
+    if (ctx->urbsInFlight > 0 || ctx->feedbackInFlight) {
+        LOGI("Start: %d URBs + feedback=%d left from a previous run — draining before restart",
+             ctx->urbsInFlight, ctx->feedbackInFlight ? 1 : 0);
+        drainAllUrbs(ctx);
+    }
     ctx->running.store(true);
     ctx->framesWritten = 0;
     ctx->submitIdx = 0;
