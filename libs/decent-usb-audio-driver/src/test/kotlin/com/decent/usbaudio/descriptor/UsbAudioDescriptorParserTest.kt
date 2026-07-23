@@ -392,6 +392,75 @@ class UsbAudioDescriptorParserTest {
         assertEquals(listOf(1, 2), vol.writeChannels)
     }
 
+    // ── Fosi Audio DS2 (262a:0001) — field getRawDescriptors(), byte-
+    //    identical on two hosts. High-speed UAC2 async, and the interface-
+    //    numbering trap: HID sits at interface 0, AudioControl at 1 —
+    //    clock requests addressed to interface 0 STALL on this device.
+    //    Also: alt1 (first with endpoints) has maxPkt 200 while streaming
+    //    runs on alt3 (400) — geometry must come from the CHOSEN alt. ────
+    private val fosiDs2 = hex(
+            "12 01 00 02 EF 02 01 40 2A 26 01 00 03 00 01 02 06 01 09 02 50 01 03 01 00 A0 32 09 04 00 00 01",
+            "03 00 00 00 09 21 00 01 00 01 22 56 00 07 05 81 03 01 00 06 08 0B 01 02 01 00 20 03 09 04 01 00",
+            "00 01 01 20 03 09 24 01 00 02 0A 40 00 00 08 24 0A 01 07 07 00 00 11 24 02 03 01 01 00 01 02 03",
+            "00 00 00 00 00 00 00 0C 24 03 04 02 03 00 0A 01 00 00 00 12 24 06 0A 03 03 00 00 00 0C 00 00 00",
+            "0C 00 00 00 00 09 04 02 00 00 01 02 20 00 09 04 02 01 02 01 02 20 00 10 24 01 03 00 01 01 00 00",
+            "00 02 03 00 00 00 00 06 24 02 01 02 10 07 05 03 05 C8 00 01 08 25 01 00 00 02 02 00 07 05 84 11",
+            "04 00 04 09 04 02 02 02 01 02 20 00 10 24 01 03 00 01 01 00 00 00 02 03 00 00 00 00 06 24 02 01",
+            "03 18 07 05 03 05 2C 01 01 08 25 01 00 00 02 02 00 07 05 84 11 04 00 04 09 04 02 03 02 01 02 20",
+            "00 10 24 01 03 00 01 01 00 00 00 02 03 00 00 00 00 06 24 02 01 04 20 07 05 03 05 90 01 01 08 25",
+            "01 00 00 02 02 00 07 05 84 11 04 00 04 09 04 02 04 02 01 02 20 00 10 24 01 03 00 01 00 00 00 80",
+            "02 00 00 00 00 00 06 24 02 01 04 20 07 05 03 05 90 01 01 08 25 01 00 00 02 02 00 07 05 84 11 04",
+            "00 04",
+    )
+
+    @Test
+    fun fosiDs2_acInterfaceIsOneNotZero() {
+        val layout = UsbAudioDescriptorParser.parse(fosiDs2)!!
+        assertEquals(UacVersion.UAC2, layout.uacVersion)
+        // THE trap: HID is interface 0, AudioControl is interface 1. Every
+        // clock-entity request must carry this in wIndex's low byte — a
+        // hardcoded 0 hits the HID interface and stalls (field-confirmed:
+        // SET_CUR/GET_CUR/CLOCK_VALID all failed, rate RANGE — the one
+        // request that used the parsed id — succeeded).
+        assertEquals(1, layout.controlInterfaceId)
+        assertEquals(1, layout.clockSourceId)
+    }
+
+    @Test
+    fun fosiDs2_perAltPacketGeometry() {
+        val layout = UsbAudioDescriptorParser.parse(fosiDs2)!!
+        assertEquals(4, layout.streamingAlts.size)
+
+        val bits = layout.streamingAlts.map { it.bitResolution }
+        assertEquals(listOf(16, 24, 32, 32), bits)
+        val subslots = layout.streamingAlts.map { it.subslotSize }
+        assertEquals(listOf(2, 3, 4, 4), subslots)
+        // alt1=200 vs alt3=400: streaming geometry taken from "the first
+        // alt with endpoints" clamps packets at 200B and starves ≥176.4k.
+        val pkts = layout.streamingAlts.map { it.maxPacketSize }
+        assertEquals(listOf(200, 300, 400, 400), pkts)
+
+        for (alt in layout.streamingAlts) {
+            assertEquals(2, alt.channels)
+            assertEquals(0x03, alt.endpointAddress)
+            assertEquals(UsbSyncType.ASYNC, alt.syncType)
+            assertTrue(alt.syncType.needsFeedback)
+            assertTrue(alt.sampleRates.isEmpty())   // UAC2: via clock RANGE
+            val fb = alt.feedback!!
+            assertEquals(0x84, fb.address)
+            assertEquals(4, fb.maxPacketSize)       // Q16.16 at high speed
+            assertEquals(4, fb.interval)            // 2^(4-1) microframes = 1 ms
+        }
+
+        val vol = layout.volume!!
+        assertEquals(10, vol.unitId)                // FU#0x0A
+        assertFalse(vol.masterVolume)               // master carries only Mute
+        assertTrue(vol.masterMute)
+        assertEquals(listOf(1, 2), vol.writeChannels)
+
+        assertFalse(UsbAudioDescriptorParser.definitelyHighSpeed(fosiDs2))
+    }
+
     @Test
     fun garbageInput_returnsNullOrEmpty() {
         assertNull(UsbAudioDescriptorParser.parse(ByteArray(0)))

@@ -1,0 +1,49 @@
+Fosi Audio DS2 (262a:0001) raw descriptors captured in the field via
+Android UsbDeviceConnection.getRawDescriptors() (Flowy USB diagnostics,
+two independent devices: HUAWEI OXF-AN10 / Android 10 and vivo V2454A /
+Android 16 — byte-identical dumps). High-speed UAC2, async feedback.
+
+Why this fixture matters — the interface-numbering trap:
+  interface 0 = HID (volume buttons/controls)
+  interface 1 = AudioControl (UAC2), clock source id=1 (bmControls 0x07)
+  interface 2 = AudioStreaming, alts:
+    alt1  2ch 16-bit subslot2  EP 0x03 maxPkt 200  ASYNC  fb 0x84/4B
+    alt2  2ch 24-bit subslot3  EP 0x03 maxPkt 300  ASYNC  fb 0x84/4B
+    alt3  2ch 32-bit subslot4  EP 0x03 maxPkt 400  ASYNC  fb 0x84/4B
+    alt4  2ch 32-bit subslot4  EP 0x03 maxPkt 400  ASYNC  fb 0x84/4B
+          (AS_GENERAL bmFormats 0x80000000 RAW_DATA — DSD alt)
+  Feature Unit id=0x0A: master = Mute only, per-channel Volume (ch1/ch2).
+
+Most DACs put AudioControl at interface 0 — the DS2 puts HID there.
+Clock-entity class requests addressed with wIndex low byte = 0 land on
+the HID interface and STALL: on this device SET_CUR(SAM_FREQ) "fails on
+every clock source id", the DAC stays on its power-on 48 kHz default,
+and 44.1k playback grinds (feedback demands 6.0 fpsi vs nominal 5.5125).
+The rate RANGE request — the one code path that passed the parsed AC
+interface number — succeeded on the same device in the same session.
+wIndex must always carry layout.controlInterfaceId.
+
+Second trap: the first alt setting with endpoints (alt1) has
+wMaxPacketSize=200, but streaming runs on alt3 (400). Geometry taken
+from "the first alt found" clamps every packet at 200 bytes, which
+starves ≥176.4 kHz rates (192k peak packets need 208+ bytes).
+
+RAW (354 bytes):
+12 01 00 02 EF 02 01 40 2A 26 01 00 03 00 01 02 06 01 09 02 50 01 03 01 00 A0 32 09 04 00 00 01
+03 00 00 00 09 21 00 01 00 01 22 56 00 07 05 81 03 01 00 06 08 0B 01 02 01 00 20 03 09 04 01 00
+00 01 01 20 03 09 24 01 00 02 0A 40 00 00 08 24 0A 01 07 07 00 00 11 24 02 03 01 01 00 01 02 03
+00 00 00 00 00 00 00 0C 24 03 04 02 03 00 0A 01 00 00 00 12 24 06 0A 03 03 00 00 00 0C 00 00 00
+0C 00 00 00 00 09 04 02 00 00 01 02 20 00 09 04 02 01 02 01 02 20 00 10 24 01 03 00 01 01 00 00
+00 02 03 00 00 00 00 06 24 02 01 02 10 07 05 03 05 C8 00 01 08 25 01 00 00 02 02 00 07 05 84 11
+04 00 04 09 04 02 02 02 01 02 20 00 10 24 01 03 00 01 01 00 00 00 02 03 00 00 00 00 06 24 02 01
+03 18 07 05 03 05 2C 01 01 08 25 01 00 00 02 02 00 07 05 84 11 04 00 04 09 04 02 03 02 01 02 20
+00 10 24 01 03 00 01 01 00 00 00 02 03 00 00 00 00 06 24 02 01 04 20 07 05 03 05 90 01 01 08 25
+01 00 00 02 02 00 07 05 84 11 04 00 04 09 04 02 04 02 01 02 20 00 10 24 01 03 00 01 00 00 00 80
+02 00 00 00 00 00 06 24 02 01 04 20 07 05 03 05 90 01 01 08 25 01 00 00 02 02 00 07 05 84 11 04
+00 04
+
+Field behavior notes (same sessions):
+- USBDEVFS_GET_SPEED ioctl -> 3 (HIGH) on both hosts.
+- Feedback radix arrives shifted: raw=786432 for 48 kHz (Q16.16 doubled)
+  — the 2^-1 radix autodetect compensates correctly.
+- readClockValid GET_CUR fails the same way as SET_CUR (same wIndex bug).
