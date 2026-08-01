@@ -669,7 +669,7 @@ class UsbAudioSink(
         usbStreamingThread = null
 
         val path = currentTrackPath
-        if (path != null && path.lowercase().endsWith(".flac")) {
+        if (config.nativeFlacEngineEnabled && path != null && path.lowercase().endsWith(".flac")) {
             val engine = NativeAudioEngine()
             try {
                 val fd = android.os.ParcelFileDescriptor.open(
@@ -911,8 +911,12 @@ class UsbAudioSink(
             currentTrackPath = resolvedPath
             Log.i(TAG, "onMediaItemTransition: uri=$uri path=$resolvedPath")
 
-            // 3. Create engine if local FLAC
-            if (resolvedPath != null) {
+            // 3. Create engine if local FLAC. With the engine disabled this
+            // whole branch stands down: a local file then behaves exactly
+            // like a network stream — the streaming thread is created lazily
+            // in handleBuffer and reused across tracks (flush() clears it),
+            // instead of being torn down and rebuilt on every transition.
+            if (config.nativeFlacEngineEnabled && resolvedPath != null) {
                 createEngineIfNeeded()
             }
 
