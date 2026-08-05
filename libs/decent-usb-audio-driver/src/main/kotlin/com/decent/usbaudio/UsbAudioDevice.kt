@@ -147,10 +147,20 @@ class UsbAudioDevice private constructor(private val context: Context) {
     /** Cached device info from the last successful openDevice() call. */
     private var cachedDeviceInfo: UsbAudioDeviceInfo? = null
 
+    @Synchronized
     fun openDevice(device: UsbDevice): UsbAudioDeviceInfo? {
-        // Return cached info if already open with valid connection
+        // Return cached info ONLY for the same enumeration of the same
+        // device. deviceName is the /dev/bus/usb/BBB/DDD node path and the
+        // device number changes on every enumeration, so a replug (or a
+        // port reset) can never alias the old connection: a detach the host
+        // app missed (or deliberately ignored during its own soft replug)
+        // used to leave this cache pointing at a DEAD fd, and every attach
+        // after it "succeeded" instantly against a device that was gone —
+        // control transfers stalling, URB submits ENODEVing, and the fresh
+        // hardware never actually opened.
         val cached = cachedDeviceInfo
-        if (cached != null && connection != null) {
+        if (cached != null && connection != null &&
+            currentDevice?.deviceName == device.deviceName) {
             Log.i(TAG, "Device already open, reusing fd=${cached.fd}")
             return cached
         }
@@ -413,6 +423,7 @@ class UsbAudioDevice private constructor(private val context: Context) {
      * This clears any stale clock/endpoint state left by the kernel driver.
      * After reset, the DAC reinitializes and will accept our SET_CUR.
      */
+    @Synchronized
     fun resetAndReopen() {
         val conn = connection ?: return
         val fd = conn.fileDescriptor
@@ -581,7 +592,15 @@ class UsbAudioDevice private constructor(private val context: Context) {
 
     /**
      * Close the USB device and release all resources.
+     *
+     * Synchronized with [openDevice]: the host app can race a claim thread
+     * against a release (rapid attach/detach flapping — a loose connector
+     * in a pocket fires both per bounce). Unsynchronized, two concurrent
+     * opens both passed the cache check, both opened the device, and one
+     * connection LEAKED open with claimed interfaces — a usbfs fd plus its
+     * kernel-side allocations per bounce, unbounded over hours.
      */
+    @Synchronized
     fun closeDevice() {
         cachedDeviceInfo = null
         volumeRange = null
