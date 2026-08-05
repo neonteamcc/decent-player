@@ -147,7 +147,10 @@ class FLACParser {
   FLAC__StreamMetadata_StreamInfo mStreamInfo;
   bool mStreamInfoValid;
 
-  const FLAC__StreamMetadata_SeekTable *mSeekTable;
+  // Seek table entries, copied OUT of the libFLAC-owned metadata object and
+  // sanitized (corrupt entries dropped) at metadataCallback time — see
+  // seek_table_sanitize.h. Empty = no usable table.
+  std::vector<FLAC__StreamMetadata_SeekPoint> mSeekPoints;
   uint64_t firstFrameOffset;
 
   // cached when the VORBIS_COMMENT metadata is parsed by libFLAC

@@ -16,6 +16,8 @@
 
 #include "include/flac_parser.h"
 
+#include "include/seek_table_sanitize.h"
+
 #include <android/log.h>
 #include <jni.h>
 
@@ -177,9 +179,22 @@ void FLACParser::metadataCallback(const FLAC__StreamMetadata* metadata) {
         ALOGE("FLACParser::metadataCallback unexpected STREAMINFO");
       }
       break;
-    case FLAC__METADATA_TYPE_SEEKTABLE:
-      mSeekTable = &metadata->data.seek_table;
+    case FLAC__METADATA_TYPE_SEEKTABLE: {
+      // Copy OUT of the libFLAC-owned metadata object (the raw pointer this
+      // used to keep relied on libFLAC not freeing it), dropping corrupt
+      // entries on the way — a single out-of-order entry in a field file's
+      // table captured every backward seek (see seek_table_sanitize.h).
+      const FLAC__StreamMetadata_SeekTable& table = metadata->data.seek_table;
+      size_t dropped = sanitizeSeekPoints(
+          table.points, table.num_points,
+          mStreamInfoValid ? (uint64_t)mStreamInfo.total_samples : 0,
+          &mSeekPoints);
+      if (dropped != 0) {
+        ALOGE("FLACParser: dropped %zu corrupt seek table entries (kept %zu)",
+              dropped, mSeekPoints.size());
+      }
       break;
+    }
     case FLAC__METADATA_TYPE_VORBIS_COMMENT:
       if (!mVorbisCommentsValid) {
         FLAC__StreamMetadata_VorbisComment vorbisComment =
@@ -288,7 +303,6 @@ FLACParser::FLACParser(DataSource* source)
       mCurrentPos(0LL),
       mEOF(false),
       mStreamInfoValid(false),
-      mSeekTable(NULL),
       firstFrameOffset(0LL),
       mVorbisCommentsValid(false),
       mPicturesValid(false),
@@ -440,7 +454,10 @@ size_t FLACParser::readBuffer(void* output, size_t output_size) {
 
 bool FLACParser::getSeekPositions(int64_t timeUs,
                                   std::array<int64_t, 4>& result) {
-  if (!mSeekTable) {
+  // Sanitized at metadataCallback time: no placeholders, strictly ascending
+  // sample numbers and offsets. Empty (absent OR fully-corrupt table) means
+  // "no table" — the Java side falls back to binary search seeking.
+  if (mSeekPoints.empty()) {
     return false;
   }
 
@@ -451,25 +468,21 @@ bool FLACParser::getSeekPositions(int64_t timeUs,
     targetSampleNumber = totalSamples - 1;
   }
 
-  FLAC__StreamMetadata_SeekPoint* points = mSeekTable->points;
-  unsigned length = mSeekTable->num_points;
+  size_t length = mSeekPoints.size();
 
-  for (unsigned i = length; i != 0; i--) {
-    int64_t sampleNumber = points[i - 1].sample_number;
-    if (sampleNumber == -1) {  // placeholder
-      continue;
-    }
+  for (size_t i = length; i != 0; i--) {
+    int64_t sampleNumber = (int64_t)mSeekPoints[i - 1].sample_number;
     if (sampleNumber <= targetSampleNumber) {
       result[0] = (sampleNumber * 1000000LL) / sampleRate;
-      result[1] = firstFrameOffset + points[i - 1].stream_offset;
-      if (sampleNumber == targetSampleNumber || i >= length ||
-          points[i].sample_number == -1) {  // placeholder
-        // exact seek, or no following non-placeholder seek point
+      result[1] = firstFrameOffset + mSeekPoints[i - 1].stream_offset;
+      if (sampleNumber == targetSampleNumber || i >= length) {
+        // exact seek, or no following seek point
         result[2] = result[0];
         result[3] = result[1];
       } else {
-        result[2] = (points[i].sample_number * 1000000LL) / sampleRate;
-        result[3] = firstFrameOffset + points[i].stream_offset;
+        result[2] =
+            ((int64_t)mSeekPoints[i].sample_number * 1000000LL) / sampleRate;
+        result[3] = firstFrameOffset + mSeekPoints[i].stream_offset;
       }
       return true;
     }

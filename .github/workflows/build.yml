@@ -46,6 +46,13 @@ jobs:
         working-directory: libs
         run: ./gradlew --no-daemon :decent-usb-audio-driver:testDebugUnitTest
 
+      - name: Unit tests (FLAC seek table sanitizer)
+        run: |
+          g++ -std=c++11 -Wall -Werror \
+            -o /tmp/seek_table_sanitize_test \
+            libs/decent-media3-decoder-flac/src/test/cpp/seek_table_sanitize_test.cc
+          /tmp/seek_table_sanitize_test
+
       - name: Build release AARs
         working-directory: libs
         run: ./gradlew --no-daemon assembleRelease
