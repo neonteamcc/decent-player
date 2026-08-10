@@ -21,10 +21,10 @@ android {
 dependencies {
     api(project(":decent-usb-audio-driver"))
     implementation("androidx.core:core-ktx:1.18.0")
-    implementation("androidx.media3:media3-exoplayer:1.9.3")
-    implementation("androidx.media3:media3-common:1.9.3")
-    implementation("androidx.media3:media3-datasource:1.9.3")
-    implementation("androidx.media3:media3-database:1.9.3")
+    implementation("androidx.media3:media3-exoplayer:1.11.0")
+    implementation("androidx.media3:media3-common:1.11.0")
+    implementation("androidx.media3:media3-datasource:1.11.0")
+    implementation("androidx.media3:media3-database:1.11.0")
 
     // JSch fork (maintained) — SFTP streaming with native offset seek
     implementation("com.github.mwiede:jsch:0.2.23")

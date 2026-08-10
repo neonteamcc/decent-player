@@ -32,10 +32,10 @@ android {
 }
 
 dependencies {
-    implementation("androidx.media3:media3-decoder:1.9.3")
-    implementation("androidx.media3:media3-exoplayer:1.9.3")
-    implementation("androidx.media3:media3-common:1.9.3")
-    implementation("androidx.media3:media3-extractor:1.9.3")
+    implementation("androidx.media3:media3-decoder:1.11.0")
+    implementation("androidx.media3:media3-exoplayer:1.11.0")
+    implementation("androidx.media3:media3-common:1.11.0")
+    implementation("androidx.media3:media3-extractor:1.11.0")
     compileOnly("org.checkerframework:checker-qual:3.42.0")
     compileOnly("com.google.errorprone:error_prone_annotations:2.28.0")
     implementation("androidx.annotation:annotation:1.9.1")

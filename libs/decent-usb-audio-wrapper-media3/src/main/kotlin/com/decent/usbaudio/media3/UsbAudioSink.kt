@@ -165,7 +165,16 @@ class UsbAudioSink(
     private var hasDeferredConfig: Boolean = false
 
 
-    override fun configure(inputFormat: Format, specifiedBufferSize: Int, outputChannels: IntArray?) {
+    /**
+     * media3 1.11.0 made [ForwardingAudioSink.configure] (Format, Int, IntArray?)
+     * final and routed it through this config-object overload — the old
+     * three-argument form is the deprecated entry point and can no longer be
+     * overridden. [AudioSink.AudioSinkConfig.format] carries what the old
+     * `inputFormat` parameter did; the buffer-size override and the channel
+     * mapping travel inside the config and are forwarded untouched.
+     */
+    override fun configure(audioSinkConfig: AudioSink.AudioSinkConfig) {
+        val inputFormat = audioSinkConfig.format
         val enc = inputFormat.pcmEncoding
         if (enc != Format.NO_VALUE) currentEncoding = enc
 
@@ -185,7 +194,7 @@ class UsbAudioSink(
                 } else {
                     Log.i(TAG, "configure: engine running, same rate — keeping alive")
                 }
-                super.configure(inputFormat, specifiedBufferSize, outputChannels)
+                super.configure(audioSinkConfig)
                 muteDelegateIfNeeded()
                 return
             }
@@ -220,7 +229,7 @@ class UsbAudioSink(
                 windowOffsetUs = -1L
                 usbStartMediaTimeNeedsInit = true
                 if (config.forceRouteToSpeaker) forceMediaToSpeaker()
-                super.configure(inputFormat, specifiedBufferSize, outputChannels)
+                super.configure(audioSinkConfig)
                 muteDelegateIfNeeded()
                 Log.i(TAG, "Delegate configured (muted, routed to speaker)")
                 return
@@ -229,7 +238,7 @@ class UsbAudioSink(
             }
         }
 
-        super.configure(inputFormat, specifiedBufferSize, outputChannels)
+        super.configure(audioSinkConfig)
 
         if (usbAudioStream != null && !config.bitPerfectEnabled) {
             releaseUsbStream()
