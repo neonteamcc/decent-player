@@ -274,10 +274,17 @@ Three smaller notes:
   16 KB page sizes. NDK r28+ links that way by default, but these `.so` files
   come out of upstream `configure` scripts rather than the NDK's own build
   systems, so nothing else here would guarantee it.
-- `setup.sh` refreshes LAME's `config.sub`/`config.guess` from GNU config.
-  The 2013 copies LAME 3.100 ships reject `aarch64-linux-android` outright,
-  so its `configure` never starts. Those files only canonicalise host
-  triples; they do not affect a byte of generated code.
+- `setup.sh` refreshes LAME's `config.sub`/`config.guess` when the copies
+  LAME 3.100 ships cannot do the job. The 2013 `config.sub` rejects
+  `aarch64-linux-android` outright, so its `configure` never starts, and the
+  2013 `config.guess` cannot identify an Apple-silicon build host. Those files
+  only canonicalise triples; they do not affect a byte of generated code.
+  Each candidate — the shipped one first, then GNU config, then the GCC
+  mirror — is validated by *running* it on the triple that has to work, which
+  is what a throttled response or a truncated download fails and a
+  "starts with `#!`" check does not. Upstream cgit throttles consecutive
+  `/plain/` requests and has served a CI runner a non-script; the mirror is
+  there for that, and the validation is what makes trusting either safe.
 - `--disable-x86asm` on the `x86` and `x86_64` ABIs only, plus
   `--disable-inline-asm` on 32-bit `x86`. FFmpeg's x86 SIMD is nasm-syntax
   assembly, so `configure` hard-fails on those two ABIs unless nasm is
