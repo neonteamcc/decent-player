@@ -26,11 +26,15 @@
 
 #include <android/log.h>
 
+#include <atomic>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 extern "C" {
@@ -143,6 +147,128 @@ std::vector<std::string> toStringVector(JNIEnv *env, jobjectArray arr) {
     }
     return out;
 }
+
+// ── Cancellation ────────────────────────────────────────────────────────
+//
+// This library sits in a download pipeline that cancels: the user aborts a
+// queued track, the batch is paused, the process is backgrounded. A lossless
+// transcode of a long track is minutes of work, so an operation that cannot be
+// stopped is a stall the caller has no answer to.
+//
+// The cancel flag lives in NATIVE memory, not in a Java field, for one reason:
+// it is read from libavformat's AVIOInterruptCB, which fires deep inside a
+// blocking read on the operation's thread, and it is written from a completely
+// different thread (whoever pressed cancel). A native atomic needs no JNIEnv
+// on either side. Java holds an opaque handle (FlowyFfmpeg.Job).
+//
+// The handles are looked up through a registry rather than passed as raw
+// pointers so that a Job closed while its own operation is still running
+// cannot become a dangling pointer: the running operation holds a shared_ptr
+// for its whole duration, and jobDestroy only drops the registry's reference.
+
+struct Job {
+    std::atomic<bool> cancelled{false};
+};
+
+std::mutex g_jobsMutex;
+std::unordered_map<int64_t, std::shared_ptr<Job>> g_jobs;
+int64_t g_nextJobId = 1;
+
+std::shared_ptr<Job> lookupJob(int64_t id) {
+    if (id == 0) return nullptr;
+    std::lock_guard<std::mutex> lock(g_jobsMutex);
+    auto it = g_jobs.find(id);
+    return it == g_jobs.end() ? nullptr : it->second;
+}
+
+// libavformat polls this while it blocks; returning non-zero makes the pending
+// read or write fail with AVERROR_EXIT instead of running to completion.
+int interruptCallback(void *opaque) {
+    auto *job = static_cast<Job *>(opaque);
+    return (job != nullptr && job->cancelled.load(std::memory_order_relaxed)) ? 1 : 0;
+}
+
+// ── Progress ────────────────────────────────────────────────────────────
+//
+// Reported on the calling thread — every operation runs synchronously inside
+// its JNI call, so the JNIEnv the operation was entered with is valid for the
+// callback and no AttachCurrentThread is needed.
+
+class Progress {
+public:
+    Progress(JNIEnv *env, jobject listener) : env_(env), listener_(listener) {
+        if (listener_ == nullptr) return;
+        jclass cls = env->GetObjectClass(listener_);
+        if (cls == nullptr) return;
+        method_ = env->GetMethodID(cls, "onProgress", "(JJ)V");
+        env->DeleteLocalRef(cls);
+        if (method_ == nullptr) env->ExceptionClear();
+    }
+
+    void setDuration(int64_t durationMs) { durationMs_ = durationMs; }
+
+    // Coalesced: a packet-rate callback would cross into the JVM thousands of
+    // times for a single track and tell the caller nothing it can use.
+    void report(int64_t positionMs) {
+        if (method_ == nullptr || failed_) return;
+        if (positionMs < 0) return;
+        if (lastMs_ >= 0 && positionMs - lastMs_ < kMinIntervalMs) return;
+        lastMs_ = positionMs;
+        emit(positionMs);
+    }
+
+    // The final tick, so a caller driving a UI ends at 100% rather than at
+    // whatever the last coalesced sample happened to be.
+    void reportFinal() {
+        if (method_ == nullptr || failed_) return;
+        emit(durationMs_ > 0 ? durationMs_ : lastMs_);
+    }
+
+    // A listener that threw leaves an exception pending on this thread. Every
+    // JNI call after that point is undefined, so the operation is unwound as
+    // if it had been cancelled and the exception surfaces at the Java caller.
+    bool failed() const { return failed_; }
+
+private:
+    static constexpr int64_t kMinIntervalMs = 250;
+
+    void emit(int64_t positionMs) {
+        env_->CallVoidMethod(listener_, method_, static_cast<jlong>(positionMs),
+                             static_cast<jlong>(durationMs_));
+        if (env_->ExceptionCheck()) failed_ = true;
+    }
+
+    JNIEnv *env_;
+    jobject listener_;
+    jmethodID method_ = nullptr;
+    int64_t durationMs_ = 0;
+    int64_t lastMs_ = -1;
+    bool failed_ = false;
+};
+
+// The pair every operation carries. Both halves are optional: a caller that
+// wants neither passes 0 / null and nothing changes.
+struct Control {
+    Job *job = nullptr;
+    Progress *progress = nullptr;
+
+    bool stopped() const {
+        if (job != nullptr && job->cancelled.load(std::memory_order_relaxed)) return true;
+        return progress != nullptr && progress->failed();
+    }
+
+    void setDuration(int64_t durationMs) const {
+        if (progress != nullptr) progress->setDuration(durationMs);
+    }
+
+    void report(int64_t positionMs) const {
+        if (progress != nullptr) progress->report(positionMs);
+    }
+
+    void reportFinal() const {
+        if (progress != nullptr) progress->reportFinal();
+    }
+};
 
 // ── Cover pictures ──────────────────────────────────────────────────────
 //
@@ -294,7 +420,21 @@ struct Input {
     }
 };
 
-int openInput(const char *path, Input *in) {
+// The interrupt callback has to be on the context BEFORE it is opened, which
+// means allocating it here instead of letting avformat_open_input do it —
+// opening a file is itself one of the blocking steps a cancel has to reach.
+int openInput(const char *path, Input *in, Job *job) {
+    in->fmt = avformat_alloc_context();
+    if (in->fmt == nullptr) {
+        setError(AVERROR(ENOMEM), "cannot allocate a demuxer context");
+        return AVERROR(ENOMEM);
+    }
+    if (job != nullptr) {
+        in->fmt->interrupt_callback.callback = interruptCallback;
+        in->fmt->interrupt_callback.opaque = job;
+    }
+    // On failure avformat_open_input frees the context and nulls the pointer,
+    // so the destructor stays correct either way.
     int ret = avformat_open_input(&in->fmt, path, nullptr, nullptr);
     if (ret < 0) {
         setError(ret, "cannot open %s", path);
@@ -312,6 +452,24 @@ int openInput(const char *path, Input *in) {
     }
     in->streamIndex = ret;
     return 0;
+}
+
+// The stream's own duration when it has one, the container's otherwise, 0 when
+// neither knows. Used both by probe() and as the denominator of progress.
+int64_t durationMs(const AVFormatContext *fmt, const AVStream *st) {
+    if (st != nullptr && st->duration > 0 && st->time_base.den > 0) {
+        return av_rescale_q(st->duration, st->time_base, AVRational{1, 1000});
+    }
+    if (fmt->duration > 0) return fmt->duration / (AV_TIME_BASE / 1000);
+    return 0;
+}
+
+// A packet's position in the source, in milliseconds, or -1 when it has no
+// timestamp to report.
+int64_t packetPositionMs(const AVPacket *pkt, AVRational timeBase) {
+    int64_t ts = pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts;
+    if (ts == AV_NOPTS_VALUE) return -1;
+    return av_rescale_q(ts, timeBase, AVRational{1, 1000});
 }
 
 // ── Output ──────────────────────────────────────────────────────────────
@@ -337,19 +495,27 @@ struct Output {
     }
 };
 
-int openOutput(const char *path, const char *muxer, Output *out) {
+int openOutput(const char *path, const char *muxer, Output *out, Job *job) {
     int ret = avformat_alloc_output_context2(&out->fmt, nullptr, muxer, path);
     if (ret < 0 || out->fmt == nullptr) {
         setError(ret, "no muxer for %s (requested '%s')", path,
                  muxer != nullptr ? muxer : "<by extension>");
         return ret < 0 ? ret : AVERROR_MUXER_NOT_FOUND;
     }
+    if (job != nullptr) {
+        out->fmt->interrupt_callback.callback = interruptCallback;
+        out->fmt->interrupt_callback.opaque = job;
+    }
     return 0;
 }
 
-int openOutputFile(Output *out, const char *path) {
+int openOutputFile(Output *out, const char *path, Job *job) {
     if (out->fmt->oformat->flags & AVFMT_NOFILE) return 0;
-    int ret = avio_open(&out->fmt->pb, path, AVIO_FLAG_WRITE);
+    // avio_open2 takes the interrupt callback the plain avio_open cannot, so a
+    // cancel reaches a blocked write to a slow or full volume too.
+    AVIOInterruptCB cb{interruptCallback, job};
+    int ret = avio_open2(&out->fmt->pb, path, AVIO_FLAG_WRITE,
+                         job != nullptr ? &cb : nullptr, nullptr);
     if (ret < 0) {
         setError(ret, "cannot write %s", path);
         return ret;
@@ -489,16 +655,18 @@ int writePacket(Output *out, AVPacket *pkt, AVRational from, AVStream *st) {
 // ── Operation: stream copy ──────────────────────────────────────────────
 
 int doRemux(const char *src, const char *dst, const char *muxer,
-            const std::vector<std::string> &metadata, const char *coverPath) {
+            const std::vector<std::string> &metadata, const char *coverPath,
+            const Control &ctl) {
     Input in;
-    int ret = openInput(src, &in);
+    int ret = openInput(src, &in, ctl.job);
     if (ret < 0) return ret;
 
     Output out;
-    ret = openOutput(dst, muxer, &out);
+    ret = openOutput(dst, muxer, &out, ctl.job);
     if (ret < 0) return ret;
 
     AVStream *ist = in.fmt->streams[in.streamIndex];
+    ctl.setDuration(durationMs(in.fmt, ist));
     AVStream *ost = avformat_new_stream(out.fmt, nullptr);
     if (ost == nullptr) {
         setError(AVERROR(ENOMEM), "avformat_new_stream failed");
@@ -526,7 +694,7 @@ int doRemux(const char *src, const char *dst, const char *muxer,
 
     applyMetadata(out.fmt, in.fmt->metadata, metadata);
 
-    ret = openOutputFile(&out, dst);
+    ret = openOutputFile(&out, dst, ctl.job);
     if (ret < 0) return ret;
     ret = avformat_write_header(out.fmt, nullptr);
     if (ret < 0) {
@@ -546,12 +714,26 @@ int doRemux(const char *src, const char *dst, const char *muxer,
             av_packet_unref(pkt);
             continue;
         }
+        // Checked here as well as in the interrupt callback: a local file
+        // rarely blocks, so the callback alone can leave a whole track's worth
+        // of copying between a cancel and the exit.
+        if (ctl.stopped()) {
+            av_packet_unref(pkt);
+            ret = AVERROR_EXIT;
+            break;
+        }
+        int64_t posMs = packetPositionMs(pkt, ist->time_base);
         ret = writePacket(&out, pkt, ist->time_base, ost);
         av_packet_unref(pkt);
         if (ret < 0) break;
+        ctl.report(posMs);
     }
     av_packet_free(&pkt);
     if (ret == AVERROR_EOF) ret = 0;
+    if (ret == AVERROR_EXIT) {
+        setError(0, "cancelled");
+        return ret;
+    }
     if (ret < 0) {
         if (g_error.empty()) setError(ret, "reading %s failed", src);
         return ret;
@@ -563,6 +745,7 @@ int doRemux(const char *src, const char *dst, const char *muxer,
         return ret;
     }
     out.completed = true;
+    ctl.reportFinal();
     return 0;
 }
 
@@ -632,12 +815,13 @@ int drainFifo(AVAudioFifo *fifo, AVCodecContext *enc, Output *out, AVStream *ost
 
 int doTranscode(const char *src, const char *dst, const char *muxer,
                 const EncoderSpec &spec, const std::vector<std::string> &metadata,
-                const char *coverPath) {
+                const char *coverPath, const Control &ctl) {
     Input in;
-    int ret = openInput(src, &in);
+    int ret = openInput(src, &in, ctl.job);
     if (ret < 0) return ret;
 
     AVStream *ist = in.fmt->streams[in.streamIndex];
+    ctl.setDuration(durationMs(in.fmt, ist));
     const AVCodec *decCodec = avcodec_find_decoder(ist->codecpar->codec_id);
     if (decCodec == nullptr) {
         setError(0, "no decoder for %s in this build",
@@ -670,7 +854,7 @@ int doTranscode(const char *src, const char *dst, const char *muxer,
     }
 
     Output out;
-    ret = openOutput(dst, muxer, &out);
+    ret = openOutput(dst, muxer, &out, ctl.job);
     if (ret < 0) return ret;
 
     AVCodecContext *enc = avcodec_alloc_context3(encCodec);
@@ -734,7 +918,7 @@ int doTranscode(const char *src, const char *dst, const char *muxer,
 
     applyMetadata(out.fmt, in.fmt->metadata, metadata);
 
-    ret = openOutputFile(&out, dst);
+    ret = openOutputFile(&out, dst, ctl.job);
     if (ret < 0) return ret;
     ret = avformat_write_header(out.fmt, nullptr);
     if (ret < 0) {
@@ -845,6 +1029,15 @@ int doTranscode(const char *src, const char *dst, const char *muxer,
             av_packet_unref(pkt);
             continue;
         }
+        // A transcode is CPU-bound, not IO-bound: the interrupt callback would
+        // only fire on the (rare, fast) reads, so the flag is polled here where
+        // the time actually goes.
+        if (ctl.stopped()) {
+            av_packet_unref(pkt);
+            setError(0, "cancelled");
+            return AVERROR_EXIT;
+        }
+        int64_t posMs = packetPositionMs(pkt, ist->time_base);
         ret = avcodec_send_packet(dec, pkt);
         av_packet_unref(pkt);
         if (ret < 0) {
@@ -853,6 +1046,11 @@ int doTranscode(const char *src, const char *dst, const char *muxer,
         }
         ret = drainDecoder();
         if (ret < 0) return ret;
+        ctl.report(posMs);
+    }
+    if (ret == AVERROR_EXIT) {
+        setError(0, "cancelled");
+        return ret;
     }
     if (ret != AVERROR_EOF && ret < 0) {
         setError(ret, "reading %s failed", src);
@@ -881,6 +1079,7 @@ int doTranscode(const char *src, const char *dst, const char *muxer,
         return ret;
     }
     out.completed = true;
+    ctl.reportFinal();
     return 0;
 }
 
@@ -893,6 +1092,39 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *) {
     return JNI_VERSION_1_6;
 }
 
+// FlowyFfmpeg.CANCELLED has to be a compile-time constant on the Java side —
+// it is what a caller compares a return value against. Pinning it here means a
+// future ffmpeg that renumbered the tag breaks the build instead of turning
+// every cancellation into an unrecognised error code at runtime.
+static_assert(AVERROR_EXIT == -1414092869, "FlowyFfmpeg.CANCELLED no longer matches AVERROR_EXIT");
+
+// ── Job lifecycle ───────────────────────────────────────────────────────
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_decent_audio_FlowyFfmpeg_jobCreate(JNIEnv *, jclass) {
+    auto job = std::make_shared<Job>();
+    std::lock_guard<std::mutex> lock(g_jobsMutex);
+    int64_t id = g_nextJobId++;
+    g_jobs.emplace(id, std::move(job));
+    return static_cast<jlong>(id);
+}
+
+// Called from any thread, including while the operation this handle belongs to
+// is running — which is the entire point.
+extern "C" JNIEXPORT void JNICALL
+Java_com_decent_audio_FlowyFfmpeg_jobCancel(JNIEnv *, jclass, jlong handle) {
+    std::shared_ptr<Job> job = lookupJob(static_cast<int64_t>(handle));
+    if (job) job->cancelled.store(true, std::memory_order_relaxed);
+}
+
+// Only drops the registry's reference. An operation still running with this
+// handle holds its own shared_ptr and keeps reading a live flag.
+extern "C" JNIEXPORT void JNICALL
+Java_com_decent_audio_FlowyFfmpeg_jobDestroy(JNIEnv *, jclass, jlong handle) {
+    std::lock_guard<std::mutex> lock(g_jobsMutex);
+    g_jobs.erase(static_cast<int64_t>(handle));
+}
+
 extern "C" JNIEXPORT jobject JNICALL
 Java_com_decent_audio_FlowyFfmpeg_probe(JNIEnv *env, jclass, jstring jpath) {
     clearError();
@@ -903,17 +1135,12 @@ Java_com_decent_audio_FlowyFfmpeg_probe(JNIEnv *env, jclass, jstring jpath) {
     }
 
     Input in;
-    if (openInput(path.c_str(), &in) < 0) return nullptr;
+    if (openInput(path.c_str(), &in, nullptr) < 0) return nullptr;
 
     AVStream *st = in.fmt->streams[in.streamIndex];
     const AVCodecParameters *par = st->codecpar;
     const char *codecName = avcodec_get_name(par->codec_id);
-    int64_t durationMs = 0;
-    if (st->duration > 0 && st->time_base.den > 0) {
-        durationMs = av_rescale_q(st->duration, st->time_base, AVRational{1, 1000});
-    } else if (in.fmt->duration > 0) {
-        durationMs = in.fmt->duration / (AV_TIME_BASE / 1000);
-    }
+    int64_t duration = durationMs(in.fmt, st);
 
     jclass cls = env->FindClass("com/decent/audio/FlowyFfmpeg$AudioInfo");
     if (cls == nullptr) return nullptr;
@@ -928,14 +1155,36 @@ Java_com_decent_audio_FlowyFfmpeg_probe(JNIEnv *env, jclass, jstring jpath) {
     return env->NewObject(cls, ctor, jcodec, static_cast<jint>(par->ch_layout.nb_channels),
                           static_cast<jint>(par->sample_rate),
                           static_cast<jint>(par->bits_per_raw_sample),
-                          static_cast<jlong>(durationMs), jformat,
+                          static_cast<jlong>(duration), jformat,
                           static_cast<jlong>(par->bit_rate));
 }
 
+namespace {
+
+// Resolves the handle once, for the whole operation. The shared_ptr is what
+// makes a close() racing the running job harmless.
+struct Held {
+    std::shared_ptr<Job> job;
+    Progress progress;
+
+    Held(JNIEnv *env, jlong handle, jobject listener)
+        : job(lookupJob(static_cast<int64_t>(handle))), progress(env, listener) {}
+
+    Control control() { return Control{job.get(), &progress}; }
+
+    // Cancelled before the operation started: do not open anything at all.
+    bool alreadyCancelled() const {
+        return job && job->cancelled.load(std::memory_order_relaxed);
+    }
+};
+
+} // namespace
+
 extern "C" JNIEXPORT jint JNICALL
-Java_com_decent_audio_FlowyFfmpeg_remux(JNIEnv *env, jclass, jstring jsrc, jstring jdst,
-                                        jstring jmuxer, jobjectArray jmeta,
-                                        jstring jcover) {
+Java_com_decent_audio_FlowyFfmpeg_nativeRemux(JNIEnv *env, jclass, jstring jsrc, jstring jdst,
+                                              jstring jmuxer, jobjectArray jmeta,
+                                              jstring jcover, jlong jjob,
+                                              jobject jprogress) {
     clearError();
     JString src(env, jsrc);
     JString dst(env, jdst);
@@ -945,15 +1194,21 @@ Java_com_decent_audio_FlowyFfmpeg_remux(JNIEnv *env, jclass, jstring jsrc, jstri
         setError(0, "remux: source and destination paths are required");
         return AVERROR(EINVAL);
     }
+    Held held(env, jjob, jprogress);
+    if (held.alreadyCancelled()) {
+        setError(0, "cancelled");
+        return AVERROR_EXIT;
+    }
     std::vector<std::string> metadata = toStringVector(env, jmeta);
     return doRemux(src.c_str(), dst.c_str(), muxer.empty() ? nullptr : muxer.c_str(),
-                   metadata, cover.empty() ? nullptr : cover.c_str());
+                   metadata, cover.empty() ? nullptr : cover.c_str(), held.control());
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_decent_audio_FlowyFfmpeg_encodeMp3(JNIEnv *env, jclass, jstring jsrc, jstring jdst,
-                                            jint bitrateKbps, jobjectArray jmeta,
-                                            jstring jcover) {
+Java_com_decent_audio_FlowyFfmpeg_nativeEncodeMp3(JNIEnv *env, jclass, jstring jsrc,
+                                                  jstring jdst, jint bitrateKbps,
+                                                  jobjectArray jmeta, jstring jcover,
+                                                  jlong jjob, jobject jprogress) {
     clearError();
     JString src(env, jsrc);
     JString dst(env, jdst);
@@ -962,6 +1217,11 @@ Java_com_decent_audio_FlowyFfmpeg_encodeMp3(JNIEnv *env, jclass, jstring jsrc, j
         setError(0, "encodeMp3: source and destination paths are required");
         return AVERROR(EINVAL);
     }
+    Held held(env, jjob, jprogress);
+    if (held.alreadyCancelled()) {
+        setError(0, "cancelled");
+        return AVERROR_EXIT;
+    }
     EncoderSpec spec;
     spec.name = "libmp3lame";
     spec.bitrate = bitrateKbps > 0 ? static_cast<int64_t>(bitrateKbps) * 1000 : 0;
@@ -969,13 +1229,14 @@ Java_com_decent_audio_FlowyFfmpeg_encodeMp3(JNIEnv *env, jclass, jstring jsrc, j
     spec.maxChannels = 2; // libmp3lame is mono or stereo; anything wider is downmixed
     std::vector<std::string> metadata = toStringVector(env, jmeta);
     return doTranscode(src.c_str(), dst.c_str(), "mp3", spec, metadata,
-                       cover.empty() ? nullptr : cover.c_str());
+                       cover.empty() ? nullptr : cover.c_str(), held.control());
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_decent_audio_FlowyFfmpeg_encodeFlac(JNIEnv *env, jclass, jstring jsrc, jstring jdst,
-                                             jint bitsPerSample, jobjectArray jmeta,
-                                             jstring jcover) {
+Java_com_decent_audio_FlowyFfmpeg_nativeEncodeFlac(JNIEnv *env, jclass, jstring jsrc,
+                                                   jstring jdst, jint bitsPerSample,
+                                                   jobjectArray jmeta, jstring jcover,
+                                                   jlong jjob, jobject jprogress) {
     clearError();
     JString src(env, jsrc);
     JString dst(env, jdst);
@@ -988,6 +1249,11 @@ Java_com_decent_audio_FlowyFfmpeg_encodeFlac(JNIEnv *env, jclass, jstring jsrc, 
         setError(0, "encodeFlac: bitsPerSample must be 16 or 24, got %d", bitsPerSample);
         return AVERROR(EINVAL);
     }
+    Held held(env, jjob, jprogress);
+    if (held.alreadyCancelled()) {
+        setError(0, "cancelled");
+        return AVERROR_EXIT;
+    }
     EncoderSpec spec;
     spec.name = "flac";
     // The FLAC encoder reads 24-bit content out of S32 samples and shifts them
@@ -998,7 +1264,7 @@ Java_com_decent_audio_FlowyFfmpeg_encodeFlac(JNIEnv *env, jclass, jstring jsrc, 
     spec.maxChannels = 8; // FLAC's own ceiling
     std::vector<std::string> metadata = toStringVector(env, jmeta);
     return doTranscode(src.c_str(), dst.c_str(), "flac", spec, metadata,
-                       cover.empty() ? nullptr : cover.c_str());
+                       cover.empty() ? nullptr : cover.c_str(), held.control());
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
