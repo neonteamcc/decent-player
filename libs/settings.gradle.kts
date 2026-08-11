@@ -18,3 +18,4 @@ rootProject.name = "decent-usb-audio"
 include(":decent-usb-audio-driver")
 include(":decent-usb-audio-wrapper-media3")
 include(":decent-media3-decoder-flac")
+include(":decent-audio-ffmpeg")

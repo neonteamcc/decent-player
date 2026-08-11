@@ -3,3 +3,8 @@ src/main/jni/upstream/
 
 # Build output of build-ffmpeg.sh (headers + shared libs per ABI)
 prebuilt/
+
+# Staged copies of the above, in the layout the AAR packages (see
+# build.gradle.kts). Both are regenerated from prebuilt/ on every build.
+prebuilt-jnilibs/
+prebuilt-assets/

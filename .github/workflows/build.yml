@@ -53,6 +53,31 @@ jobs:
             libs/decent-media3-decoder-flac/src/test/cpp/seek_table_sanitize_test.cc
           /tmp/seek_table_sanitize_test
 
+      # Four ABIs of FFmpeg + LAME take tens of minutes, so the result is
+      # cached. The key hashes both scripts: a corrected build script must
+      # never be served artifacts produced by the old one, and setup.sh is in
+      # the key because it pins the upstream revisions.
+      - name: Cache FFmpeg build
+        uses: actions/cache@v4
+        with:
+          path: libs/decent-audio-ffmpeg/prebuilt
+          key: ffmpeg-${{ runner.os }}-${{ hashFiles('libs/decent-audio-ffmpeg/build-ffmpeg.sh', 'libs/decent-audio-ffmpeg/setup.sh') }}
+
+      # Skipped when the cache hit: build-ffmpeg.sh starts with `rm -rf
+      # prebuilt`, so running it on a restored tree would throw the cache away
+      # and rebuild for nothing.
+      - name: Fetch and build FFmpeg (audio-only)
+        working-directory: libs/decent-audio-ffmpeg
+        env:
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
+        run: |
+          if [ -f prebuilt/arm64-v8a/lib/libavcodec.so ]; then
+            echo "prebuilt/ restored from cache; skipping the FFmpeg build"
+            exit 0
+          fi
+          bash setup.sh
+          bash build-ffmpeg.sh
+
       - name: Build release AARs
         working-directory: libs
         run: ./gradlew --no-daemon assembleRelease

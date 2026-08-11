@@ -11,20 +11,176 @@ codec set is a short whitelist instead of "whatever might turn up".
 
 ## What this module contains
 
-Two scripts and this document. **No upstream source and no binaries are
-committed** — same convention as `decent-media3-decoder-flac`, which clones
-`xiph/flac` at build time. Both the fetched sources and the build output are
-gitignored:
+Two build scripts, a thin JNI wrapper, and this document. **No upstream source
+and no binaries are committed** — same convention as
+`decent-media3-decoder-flac`, which clones `xiph/flac` at build time. Both the
+fetched sources and the build output are gitignored:
 
 ```
 setup.sh          fetch FFmpeg + LAME sources into src/main/jni/upstream/
 build-ffmpeg.sh   cross-compile both for arm64-v8a, armeabi-v7a, x86_64, x86
-prebuilt/         build output (gitignored)
+build.gradle.kts  the AAR: compiles the wrapper, packages the prebuilt libs
+src/main/jni/     CMakeLists.txt + flowy_audio_jni.cc  (the wrapper)
+src/main/java/    com.decent.audio.FlowyFfmpeg          (the public surface)
+src/androidTest/  the on-device proof (see "Device proof")
+prebuilt/         build output of build-ffmpeg.sh (gitignored)
   <abi>/lib/lib{avcodec,avformat,avutil,swresample}.so
   <abi>/include/  per-ABI headers as installed
   include/        the same headers published once, for consumers' CMake
   COPYING.ffmpeg.LGPLv2.1, COPYING.lame.LGPLv2
+prebuilt-jnilibs/ prebuilt/<abi>/lib/*.so restaged as <abi>/*.so (gitignored)
+prebuilt-assets/  the COPYING files restaged as assets/ (gitignored)
 ```
+
+The last two exist because the AAR packages jniLibs as `<abi>/*.so` — the
+`lib/` level in build-ffmpeg.sh's install prefix has to come out — and because
+the LGPL notices have to ride *inside* the artifact rather than merely exist in
+a gitignored build tree. Both are regenerated from `prebuilt/` on every build
+by the `stageJniLibs` / `stageLicenses` tasks.
+
+## The published artifact
+
+`cc.neonteam.decent:decent-audio-ffmpeg`, ~5.5 MB, containing:
+
+| | |
+|---|---|
+| `jni/<abi>/libflowyaudio.so` | the wrapper, one per ABI |
+| `jni/<abi>/lib{avcodec,avformat,avutil,swresample}.so` | FFmpeg, one set per ABI |
+| `assets/licenses/COPYING.ffmpeg.LGPLv2.1`, `COPYING.lame.LGPLv2` | the notices |
+| `classes.jar` | `com.decent.audio.FlowyFfmpeg` |
+
+Twenty `.so` entries in total. Per ABI, `libflowyaudio.so` plus its four
+FFmpeg libraries:
+
+| ABI | wrapper | total |
+|---|---:|---:|
+| arm64-v8a | 334 KB | 2.7 MB |
+| armeabi-v7a | 214 KB | 2.4 MB |
+| x86_64 | 327 KB | 2.8 MB |
+| x86 | 302 KB | 3.1 MB |
+
+An app that splits by ABI ships one column, not the sum.
+
+`libflowyaudio.so`'s only `DT_NEEDED` entries beyond the four are `liblog`,
+`libm`, `libdl`, `libc` — all Android platform libraries. Every `LOAD` segment
+in all twenty files is aligned to `0x4000`: the wrapper's `CMakeLists.txt`
+passes `-Wl,-z,max-page-size=16384` for the same reason `build-ffmpeg.sh` does,
+and it is not optional here — a wrapper without it fails to load beside
+libraries that have it on an Android 15+ device with 16 KB pages.
+
+## The JNI surface, and why it is not a command line
+
+The obvious shape for an FFmpeg binding is `int run(String[] argv)` delegating
+to `fftools/ffmpeg.c`. **That cannot be built against these libraries**, and
+the reason is structural rather than incidental: ffmpeg's CLI is written on top
+of libavfilter — it constructs a filter graph for every job, stream copy
+included — and the configure line above carries `--disable-avfilter` (and
+`--disable-programs`, so `fftools` is not compiled at all). The generated
+`config.h` says so outright: `CONFIG_AVFILTER 0`, `CONFIG_FFMPEG 0`.
+
+Getting a command line back would mean re-enabling avfilter plus the audio
+filter set, *and* carrying `fftools`' dozen-plus source files across every
+FFmpeg upgrade. That is precisely what ffmpeg-kit did, and ffmpeg-kit was
+archived in 2025.
+
+So the surface is typed. The whole operation set the download pipeline needs is
+four things, and none of them is a filter graph:
+
+| operation | route |
+|---|---|
+| stream copy (remux, passthrough) | demux → `avcodec_parameters_copy` → mux |
+| MP3 320 from AAC | decode → swresample → libmp3lame |
+| FLAC at a pinned 24 bits from E-AC-3 | decode → swresample → flac |
+| stream copy + metadata + cover into MP4 | the above, plus an `attached_pic` stream |
+
+Sample format, sample rate and channel layout conversion between a decoder's
+output and an encoder's input is exactly what libswresample is for, and
+swresample *is* enabled. It also rematrixes, which is why a multichannel source
+reaching the MP3 branch is downmixed rather than refused — no libavfilter
+needed for that either.
+
+```java
+package com.decent.audio;
+
+public final class FlowyFfmpeg {
+    public static final int OK = 0;
+
+    public static final class AudioInfo {
+        public final String codecName;      // ffmpeg's own name: "flac", "eac3", …
+        public final int channels;
+        public final int sampleRate;
+        public final int bitsPerRawSample;  // 0 when the codec does not say
+        public final long durationMs;       // 0 when the container does not say
+        public final String formatName;     // the demuxer's name
+        public final long bitRate;          // 0 when unknown
+    }
+
+    public static native AudioInfo probe(String path);          // null on failure
+    public static        String    probeCodec(String path);     // convenience over probe
+    public static        int       probeChannels(String path);
+    public static        int       probeSampleRate(String path);
+
+    // metadata is a flat [key, value, …] array, or null. Source tags are copied
+    // first and these override; an empty value removes an inherited key.
+    // coverPath is a JPEG or PNG file, or null — stored verbatim, never decoded,
+    // which is why no image codec has to be built in.
+    public static native int remux(String src, String dst, String muxer,
+                                   String[] metadata, String coverPath);
+    public static native int encodeMp3(String src, String dst, int bitrateKbps,
+                                       String[] metadata, String coverPath);
+    public static native int encodeFlac(String src, String dst, int bitsPerSample,
+                                        String[] metadata, String coverPath);
+
+    public static native boolean hasEncoder(String name);
+    public static native boolean hasDecoder(String name);
+    public static native String  version();
+    public static native String  lastError();
+}
+```
+
+`muxer` is an ffmpeg muxer name (`flac`, `mp4`, `ipod`, `mp3`, `wav`) or `null`
+to guess from the destination's extension. `bitsPerSample` is 16 or 24; 24 goes
+through `AV_SAMPLE_FMT_S32` with `bits_per_raw_sample = 24`, which is the pair
+`flacenc.c` reads as "24-bit" (`bps_code` 6) — it shifts the samples down
+itself, so nothing upstream has to pre-scale them.
+
+Every operation returns `OK` or a non-zero failure; `lastError()` is the
+human-readable channel and combines our own message with the last error
+libav* logged. **It is thread-local** — read it on the thread that ran the
+operation. Paths are filesystem paths, not content URIs: `file` is the only
+protocol in this build.
+
+Two things this wrapper deliberately does *not* do, so that a later caller does
+not discover them the hard way:
+
+- **No bitstream filters are applied.** None of the four operations needs one.
+  A case that would — ADTS `.aac` stream-copied into MP4, which needs
+  `aac_adtstoasc` — is not in the pipeline; it would fail at
+  `avformat_write_header` with a message saying so, not silently.
+- **No progress or cancellation callback.** Operations run to completion. Add
+  one via `AVIOInterruptCB` if a job ever gets long enough to need cancelling.
+
+## Device proof
+
+Nothing about the codec set can be established by grepping the built binary
+(see "Two checks that look right and prove nothing"). The check that cannot be
+faked is `avcodec_find_encoder_by_name()` returning non-null on a device, so
+that is what `src/androidTest/` asserts, alongside a full round trip: a WAV
+tone synthesised on device is encoded to 24-bit FLAC, to 16-bit FLAC and to
+MP3 320, stream-copied FLAC → FLAC, and stream-copied into MP4 with metadata
+and a cover picture — each result read back with `probe`. Negative controls
+assert that `aac`'s *encoder*, `opus` and `alac` are absent, which is what
+proves `--disable-everything` still holds.
+
+```bash
+cd libs && ANDROID_SERIAL=<device> ./gradlew :decent-audio-ffmpeg:connectedDebugAndroidTest
+```
+
+Set `ANDROID_SERIAL`, or the run installs on every attached device.
+
+It is not in CI: the FFmpeg build already dominates the job, and the x86_64
+emulator a GitHub runner can host is not the ABI the fleet uses. Run it against
+an arm64 emulator or a real device when the wrapper or the codec set changes.
 
 Four shared libraries per ABI, and nothing else to package. LAME is staged
 into the ffmpeg source tree (`upstream/ffmpeg/deps/<abi>/`) rather than into
@@ -56,9 +212,18 @@ bash setup.sh
 ANDROID_NDK_ROOT=~/Library/Android/sdk/ndk/29.0.14206865 bash build-ffmpeg.sh
 ```
 
-In CI the NDK is at `$ANDROID_HOME/ndk/29.0.14206865`. Nothing else is
-required — FFmpeg and LAME use their own `configure`, so no CMake is needed
-for this module. Four ABIs take tens of minutes; that is normal.
+Then build the AAR, which compiles the wrapper and packages the result:
+
+```bash
+cd libs && ./gradlew :decent-audio-ffmpeg:assembleRelease
+```
+
+In CI the NDK is at `$ANDROID_HOME/ndk/29.0.14206865`. FFmpeg and LAME use
+their own `configure`, so the two scripts above need no CMake; the wrapper does,
+and it comes from the SDK (`sdkmanager "cmake;3.22.1"`) rather than from
+`$PATH`. Four ABIs of FFmpeg take tens of minutes, which is why CI caches
+`prebuilt/` on a key that hashes both scripts; the wrapper itself builds in
+seconds.
 
 The host toolchain tag (`linux-x86_64` in CI, `darwin-x86_64` on a
 maintainer's Mac) and the job count (`nproc` vs `sysctl`) are both detected,
@@ -210,8 +375,15 @@ someone runs `strings` on a published library:
 
 ```bash
 strings prebuilt/*/lib/*.so | grep -c "$HOME"   # must be 0
-grep -rl "$HOME" prebuilt/                      # must be empty
+grep -ralF -- "$HOME" prebuilt/                 # must be empty
 ```
+
+`-a` is not optional in the second line. Without it the leg silently skips
+every binary file, and it does so *inconsistently across hosts*: GNU `grep -l`
+still lists a matching binary, but a ugrep installed as `grep` — common on
+developer Macs — reports `Binary file matches` to stdout without listing it,
+so a `-n`-style check reads as empty. Forcing text mode makes the result the
+same everywhere. `-F` keeps a `$HOME` containing regex metacharacters literal.
 
 ## Codec set
 
