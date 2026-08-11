@@ -21,16 +21,29 @@ setup.sh          fetch FFmpeg + LAME sources into src/main/jni/upstream/
 build-ffmpeg.sh   cross-compile both for arm64-v8a, armeabi-v7a, x86_64, x86
 prebuilt/         build output (gitignored)
   <abi>/lib/lib{avcodec,avformat,avutil,swresample}.so
-  <abi>/lib/pkgconfig/
   <abi>/include/  per-ABI headers as installed
   include/        the same headers published once, for consumers' CMake
+  COPYING.ffmpeg.LGPLv2.1, COPYING.lame.LGPLv2
 ```
 
-Four shared libraries per ABI, and nothing else to package: `libmp3lame.a`
-is removed from the prefix after each ABI, since it is a build-time input
-that has already been folded into `libavcodec.so`. Beyond the four, the only
-`DT_NEEDED` entries are `libm`, `libz`, `libc` — all Android platform
-libraries, nothing extra to ship.
+Four shared libraries per ABI, and nothing else to package. LAME is staged
+into the ffmpeg source tree (`upstream/ffmpeg/deps/<abi>/`) rather than into
+the published prefix, so `libmp3lame.a` and `lame/*.h` never appear in
+`prebuilt/` at all — it is a build-time input that has already been folded
+into `libavcodec.so`, and nothing downstream should be able to link it a
+second time. Beyond the four, the only `DT_NEEDED` entries are `libm`,
+`libz`, `libc` — all Android platform libraries, nothing extra to ship.
+
+`lib/pkgconfig/` and `share/` are deleted after each ABI. The `.pc` files
+have no consumer (consumers link these libraries by explicit path, not
+through pkg-config) and their `prefix=` line is an absolute build path;
+`share/` is ffmpeg's example `.c` files plus LAME's man page, which
+`--disable-doc` does not suppress and which would otherwise be published
+four times over.
+
+The licence texts travel with the binaries: shipping shared libraries is
+how the LGPL's relinking requirement is satisfied here, and the notice is
+the other half of that obligation.
 
 Pinned upstream revisions live at the top of `setup.sh`: FFmpeg `n8.1.2` and
 LAME `3.100`.
@@ -121,14 +134,84 @@ assertions:
 - **Every SONAME on every ABI is unversioned.** This is the failure mode the
   whole module is arranged around, and it is invisible until a device fails
   to `dlopen`, so it is asserted 16 times rather than spot-checked once.
-- **The codec set is really in the binary.** Note that
-  `nm -D | grep ff_flac_encoder` is *not* a usable check and always returns
-  zero: `ff_*` codec structs are hidden symbols, and ffmpeg's version script
-  limits the dynamic symbol table to the public `av*` API. The script greps
-  the codecs' `long_name` strings instead — they live in the `AVCodec`
-  structs themselves, so their presence is direct evidence of what was
-  compiled in — plus `LAME3.100`, which proves libmp3lame really did get
-  folded into `libavcodec.so`.
+- **The codec set is really enabled**, asserted per ABI against the
+  generated `config_components.h` immediately after each `configure` — all
+  25 components plus `CONFIG_LIBMP3LAME` (which lives in `config.h`, not
+  `config_components.h`), and a handful of negative controls that must be
+  `0`. See below for why nothing else works.
+- **libmp3lame really was folded in**, from the `LAME3.100` banner in
+  `libavcodec.so`. Unlike a codec `long_name`, that string comes from the
+  LAME sources, so it is real evidence.
+- **No host path is present in any published file** — see "Host-neutral
+  builds" below.
+
+### Two checks that look right and prove nothing
+
+Do not "simplify" the codec assertion back into either of these.
+
+`nm -D | grep ff_flac_encoder` returns zero on a *correct* build: `ff_*`
+codec structs are hidden symbols and ffmpeg's version script limits the
+dynamic symbol table to the public `av*` API.
+
+Grepping the codecs' `long_name` strings is worse, because it appears to
+work. `libavcodec/codec_desc.c` compiles a descriptor for **every** codec
+unconditionally, so those strings survive `--disable-everything` whether or
+not the codec is built. Measured on exactly this configuration:
+
+| grepped in `libavcodec.so` | hits | this build can actually… |
+|---|---:|---|
+| `FLAC (Free Lossless Audio Codec)` | 1 | yes |
+| `H.264 / AVC` | 1 | **no** |
+| `Apple Lossless Audio Codec` | 1 | **no** |
+| `Opus` | 1 | **no** |
+| `Vorbis` | 2 | **no** |
+
+So the string proves a descriptor exists, not an encoder, and a build that
+silently lost `--enable-encoder=flac` would print the same green result.
+(`PCM signed 24-bit little-endian` additionally substring-matches its own
+`…planar` variant.) `config_components.h` is ffmpeg's own authoritative
+record of what `configure` enabled, it is free to check, and it fails
+*before* `make` rather than after.
+
+That difference was confirmed, not assumed: re-running an otherwise
+identical `configure` with `--enable-encoder=flac` dropped produced
+`#define CONFIG_FLAC_ENCODER 0` and the assertion exited 1 with
+`MISSING CONFIG_FLAC_ENCODER`, while the `FLAC (Free Lossless Audio Codec)`
+string count in the binary stayed at 1.
+
+## Host-neutral builds
+
+ffmpeg's `configure` stores its **entire argument list** in
+`FFMPEG_CONFIGURATION` (`config.h`), which every library then carries at
+runtime as `avcodec_configuration()`. An absolute `--prefix`, `--cc` or
+`--sysroot` is therefore baked into all four `.so` files. That is
+unacceptable twice over:
+
+- these artifacts are published from a **public** repository, so an absolute
+  path ships the build machine's home directory and with it a username;
+- the same commit built on a Mac and on a CI runner would produce
+  byte-different libraries purely because the paths differ.
+
+So no configure argument may contain a host path:
+
+- `$TOOLCHAIN/bin` goes on `PATH` and the tools are named bare
+  (`--cc=aarch64-linux-android28-clang`, `--cross-prefix=llvm-`,
+  `--nm=llvm-nm`). NDK clang locates its own sysroot relative to itself, so
+  `--sysroot` is not needed at all.
+- `--prefix` is a fixed fictional path (`/decent-audio-ffmpeg`) and
+  `make install DESTDIR=…` relocates the tree into `prebuilt/<abi>/`.
+- libmp3lame is staged *inside* the ffmpeg source tree so ffmpeg can find it
+  through a relative `-Ideps/<abi>/include` / `-Ldeps/<abi>/lib`; `configure`
+  and `make` both run with the ffmpeg source root as cwd, so it resolves.
+
+The build ends with a leak scan that asserts this on the finished artifacts
+and exits non-zero on any hit — the failure is otherwise invisible until
+someone runs `strings` on a published library:
+
+```bash
+strings prebuilt/*/lib/*.so | grep -c "$HOME"   # must be 0
+grep -rl "$HOME" prebuilt/                      # must be empty
+```
 
 ## Codec set
 
