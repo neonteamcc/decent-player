@@ -20,10 +20,13 @@ fetched sources and the build output are gitignored:
 setup.sh          fetch FFmpeg + LAME sources into src/main/jni/upstream/
 build-ffmpeg.sh   cross-compile both for arm64-v8a, armeabi-v7a, x86_64, x86
 build.gradle.kts  the AAR: compiles the wrapper, packages the prebuilt libs
+consumer-rules.pro  R8 keeps that travel inside the AAR (see "R8 / ProGuard")
 src/main/jni/     CMakeLists.txt + flowy_audio_jni.cc  (the wrapper)
 src/main/java/    com.decent.audio.FlowyFfmpeg          (the public surface)
 src/androidTest/  the on-device proof (see "Device proof")
+  assets/         two committed synthetic fixtures this build cannot synthesise
 prebuilt/         build output of build-ffmpeg.sh (gitignored)
+  .complete       written last; CI's "the build really finished" marker
   <abi>/lib/lib{avcodec,avformat,avutil,swresample}.so
   <abi>/include/  per-ABI headers as installed
   include/        the same headers published once, for consumers' CMake
@@ -124,12 +127,29 @@ public final class FlowyFfmpeg {
     // first and these override; an empty value removes an inherited key.
     // coverPath is a JPEG or PNG file, or null — stored verbatim, never decoded,
     // which is why no image codec has to be built in.
-    public static native int remux(String src, String dst, String muxer,
-                                   String[] metadata, String coverPath);
-    public static native int encodeMp3(String src, String dst, int bitrateKbps,
-                                       String[] metadata, String coverPath);
-    public static native int encodeFlac(String src, String dst, int bitsPerSample,
-                                        String[] metadata, String coverPath);
+    public static int remux(String src, String dst, String muxer,
+                            String[] metadata, String coverPath);
+    public static int encodeMp3(String src, String dst, int bitrateKbps,
+                                String[] metadata, String coverPath);
+    public static int encodeFlac(String src, String dst, int bitsPerSample,
+                                 String[] metadata, String coverPath);
+
+    // Same three with cancellation and progress; both arguments may be null.
+    public static int remux(…, Job job, ProgressListener progress);
+    public static int encodeMp3(…, Job job, ProgressListener progress);
+    public static int encodeFlac(…, Job job, ProgressListener progress);
+
+    public static final int CANCELLED = -1414092869;   // ffmpeg's AVERROR_EXIT
+
+    public static final class Job implements AutoCloseable {
+        public void cancel();          // from any thread, any time
+        public boolean isCancelled();
+        public void close();           // safe while the operation still runs
+    }
+
+    public interface ProgressListener {
+        void onProgress(long positionMs, long durationMs);
+    }
 
     public static native boolean hasEncoder(String name);
     public static native boolean hasDecoder(String name);
@@ -138,8 +158,25 @@ public final class FlowyFfmpeg {
 }
 ```
 
+**Cancellation** is a native atomic behind an opaque handle, not a Java field:
+it is read from libavformat's `AVIOInterruptCB` — which fires inside a blocked
+read or write, on the operation's own thread — and written by whichever thread
+pressed cancel, so neither side can afford to need a `JNIEnv`. The flag is
+polled in the demux/decode loop as well, because a lossless transcode is
+CPU-bound and the interrupt callback alone would let it run to the end of the
+track first. A cancelled operation returns `CANCELLED` and leaves no
+destination file, exactly like a failed one.
+
+**Progress** is reported on the operation's thread, against the *source's*
+timeline, coalesced to one callback per 250 ms of material plus a final tick at
+completion. A listener that throws aborts the operation rather than being
+swallowed.
+
 `muxer` is an ffmpeg muxer name (`flac`, `mp4`, `ipod`, `mp3`, `wav`) or `null`
-to guess from the destination's extension. `bitsPerSample` is 16 or 24; 24 goes
+to guess from the destination's extension. **`ipod` is not a synonym for `mp4`
+with an `.m4a` name:** its tag table (`codec_ipod_tags` in `movenc.c`) lists
+AAC, ALAC and AC-3 and *not* E-AC-3, so an Atmos stream copy must ask for
+`mp4`. Asserted both ways in `FlowyFfmpegFixtureTest`. `bitsPerSample` is 16 or 24; 24 goes
 through `AV_SAMPLE_FMT_S32` with `bits_per_raw_sample = 24`, which is the pair
 `flacenc.c` reads as "24-bit" (`bps_code` 6) — it shifts the samples down
 itself, so nothing upstream has to pre-scale them.
@@ -157,8 +194,33 @@ not discover them the hard way:
   A case that would — ADTS `.aac` stream-copied into MP4, which needs
   `aac_adtstoasc` — is not in the pipeline; it would fail at
   `avformat_write_header` with a message saying so, not silently.
-- **No progress or cancellation callback.** Operations run to completion. Add
-  one via `AVIOInterruptCB` if a job ever gets long enough to need cancelling.
+- **The source's embedded artwork is not carried across.** A stream copy takes
+  the audio stream only; `coverPath` is the sole way art gets into the output.
+  That is deliberate for this caller — the pipeline's tag writer supplies the
+  cover from the track's own cover URL, and keeping both would write the
+  artwork twice.
+
+## R8 / ProGuard
+
+The AAR ships its own keep rules (`consumer-rules.pro` →
+`consumerProguardFiles` → `proguard.txt` inside the artifact), so a consuming
+app inherits them and cannot forget them.
+
+They are not optional. `proguard-android-optimize.txt`'s
+`-keepclasseswithmembernames class * { native <methods>; }` saves `FlowyFfmpeg`
+and the names of its native methods — enough for JNI's automatic binding — and
+saves nothing that the `.so` looks up by name. `flowy_audio_jni.cc` does
+exactly that in two places: `FindClass` + `GetMethodID("<init>")` + `NewObject`
+on `FlowyFfmpeg$AudioInfo` (whose constructor has no Java caller at all, so it
+is stripped outright without a keep) and `GetMethodID("onProgress")` on the
+`ProgressListener` implementation. Missing either is a release-only crash on
+the first call and invisible in debug.
+
+Confirm after changing anything here:
+
+```bash
+unzip -p decent-audio-ffmpeg-release.aar proguard.txt
+```
 
 ## Device proof
 
@@ -171,6 +233,17 @@ MP3 320, stream-copied FLAC → FLAC, and stream-copied into MP4 with metadata
 and a cover picture — each result read back with `probe`. Negative controls
 assert that `aac`'s *encoder*, `opus` and `alac` are absent, which is what
 proves `--disable-everything` still holds.
+
+Two inputs cannot be synthesised by a build with this codec set, and they
+happen to be the two the whole route change was made for — FLAC inside MP4 and
+E-AC-3 5.1. Both ride as committed synthetic fixtures under
+`src/androidTest/assets/` (a generated tone, regeneration commands in the
+README beside them), and `FlowyFfmpegFixtureTest` proves on device what was
+previously only read out of FFmpeg's sources: the MP4 `dfLa` extradata produces
+a FLAC that still decodes, and a 5.1 E-AC-3 source reaches the FLAC encoder as
+six channels at 24 bits. Cancellation and progress are asserted there too,
+including a cancel issued from another thread while the encode is provably
+still running.
 
 ```bash
 cd libs && ANDROID_SERIAL=<device> ./gradlew :decent-audio-ffmpeg:connectedDebugAndroidTest
@@ -224,7 +297,17 @@ and it comes from the SDK (`sdkmanager "cmake;3.22.1"`) rather than from
 `$PATH`. All four ABIs of FFmpeg take **1m45s on a GitHub runner** — the codec
 set is small enough that each `make` is about thirteen seconds — and rather
 longer on a laptop. CI caches `prebuilt/` anyway, on a key that hashes both
-scripts. The wrapper itself builds in seconds.
+scripts and the NDK revision that compiled them. The wrapper itself builds in
+seconds.
+
+The cache is written by an explicit `actions/cache/save` step guarded by
+`if: success()`, not by the combined action, and the "already built, skip it"
+test is `prebuilt/.complete` — a marker `build-ffmpeg.sh` writes only after the
+last ABI and the leak scan. The combined action's post step runs on a failed
+job too, so a run that died at the third ABI used to save a two-ABI tree under
+the key; every later run then restored it, skipped the build and failed at
+CMake for the ABI that was never built, until someone evicted the cache by
+hand. The presence of any one library is not evidence that a build finished.
 
 The host toolchain tag (`linux-x86_64` in CI, `darwin-x86_64` on a
 maintainer's Mac) and the job count (`nproc` vs `sysctl`) are both detected,
