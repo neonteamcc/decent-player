@@ -54,7 +54,7 @@ FFmpeg libraries:
 
 | ABI | wrapper | total |
 |---|---:|---:|
-| arm64-v8a | 334 KB | 2.7 MB |
+| arm64-v8a | 334 KB | 2.6 MB |
 | armeabi-v7a | 214 KB | 2.4 MB |
 | x86_64 | 327 KB | 2.8 MB |
 | x86 | 302 KB | 3.1 MB |
@@ -221,9 +221,10 @@ cd libs && ./gradlew :decent-audio-ffmpeg:assembleRelease
 In CI the NDK is at `$ANDROID_HOME/ndk/29.0.14206865`. FFmpeg and LAME use
 their own `configure`, so the two scripts above need no CMake; the wrapper does,
 and it comes from the SDK (`sdkmanager "cmake;3.22.1"`) rather than from
-`$PATH`. Four ABIs of FFmpeg take tens of minutes, which is why CI caches
-`prebuilt/` on a key that hashes both scripts; the wrapper itself builds in
-seconds.
+`$PATH`. All four ABIs of FFmpeg take **1m45s on a GitHub runner** — the codec
+set is small enough that each `make` is about thirteen seconds — and rather
+longer on a laptop. CI caches `prebuilt/` anyway, on a key that hashes both
+scripts. The wrapper itself builds in seconds.
 
 The host toolchain tag (`linux-x86_64` in CI, `darwin-x86_64` on a
 maintainer's Mac) and the job count (`nproc` vs `sysctl`) are both detected,
