@@ -1,0 +1,5 @@
+# Upstream sources fetched by setup.sh — never vendored (see README.md)
+src/main/jni/upstream/
+
+# Build output of build-ffmpeg.sh (headers + shared libs per ABI)
+prebuilt/
