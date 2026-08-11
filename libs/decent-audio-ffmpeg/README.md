@@ -123,8 +123,8 @@ public final class FlowyFfmpeg {
     public static        int       probeChannels(String path);
     public static        int       probeSampleRate(String path);
 
-    // metadata is a flat [key, value, …] array, or null. Source tags are copied
-    // first and these override; an empty value removes an inherited key.
+    // metadata is a flat [key, value, …] array, or null. The output carries
+    // those tags and NOTHING else — see "Metadata" below.
     // coverPath is a JPEG or PNG file, or null — stored verbatim, never decoded,
     // which is why no image codec has to be built in.
     public static int remux(String src, String dst, String muxer,
@@ -134,10 +134,21 @@ public final class FlowyFfmpeg {
     public static int encodeFlac(String src, String dst, int bitsPerSample,
                                  String[] metadata, String coverPath);
 
+    // Same three with the source's own tags kept or dropped explicitly.
+    public static final boolean INHERIT_SOURCE_METADATA = true;
+    public static final boolean STRIP_SOURCE_METADATA   = false;  // the default
+    public static int remux(…, boolean inheritSourceMetadata);
+    public static int encodeMp3(…, boolean inheritSourceMetadata);
+    public static int encodeFlac(…, boolean inheritSourceMetadata);
+
     // Same three with cancellation and progress; both arguments may be null.
     public static int remux(…, Job job, ProgressListener progress);
     public static int encodeMp3(…, Job job, ProgressListener progress);
     public static int encodeFlac(…, Job job, ProgressListener progress);
+
+    // And the full form of each.
+    public static int remux(…, boolean inheritSourceMetadata,
+                            Job job, ProgressListener progress);
 
     public static final int CANCELLED = -1414092869;   // ffmpeg's AVERROR_EXIT
 
@@ -186,6 +197,47 @@ human-readable channel and combines our own message with the last error
 libav* logged. **It is thread-local** — read it on the thread that ran the
 operation. Paths are filesystem paths, not content URIs: `file` is the only
 protocol in this build.
+
+## Metadata: container provenance is stripped, always
+
+An output carries the caller's `metadata` and nothing else. Two separate things
+had to be switched off for that to be true, and both are unconditional in the
+default mode:
+
+1. **The source's tags are not copied** — neither the container dictionary nor
+   the stream one. The pipeline's sources are MP4-wrapped audio from a
+   streaming platform, and an MP4 carries `major_brand`, `minor_version`,
+   `compatible_brands` and `encoder` at container level plus `handler_name` /
+   `vendor_id` per stream. Copied into a FLAC they become Vorbis comments and
+   stay in the user's library forever. They can also be *false*: a Dolby Atmos
+   source downmixed to plain 5.1 still carries `compatible_brands=mp42dby1`,
+   i.e. a text tag claiming Dolby about audio that is no longer Dolby. A tag
+   that lies about the file is worse than a missing one.
+2. **libavformat does not sign the output.** Left alone, `mux.c`'s `init_muxer`
+   writes `encoder=LIBAVFORMAT_IDENT` into the output's metadata (`mux.c:352`,
+   with flags `0`, so a caller cannot pre-empt it by setting the key), which
+   becomes a Vorbis comment in FLAC and a `TSSE` frame in MP3, and `movenc`
+   adds a `©too` atom of its own (`movenc.c:4764`). `AVFMT_FLAG_BITEXACT` on
+   the output context is the only switch for all three; for the muxers this
+   build has it does nothing else. It is deliberately *not* set on the
+   encoders, so libmp3lame's DSP path is untouched.
+
+Pass `INHERIT_SOURCE_METADATA` to get the old behaviour: the source's tags
+first, the caller's on top. **Only in that mode does an empty value in
+`metadata` mean "remove this key"** — with nothing inherited there is nothing
+to remove. The stamp suppression is not part of the switch: even an inheriting
+operation drops `encoder`, because libavformat deletes that key under bitexact
+(`mux.c:355`).
+
+Two things are out of reach and both are structure rather than tags: an MP4
+output's `ftyp` brands are `movenc`'s own and describe the file it just wrote,
+and an MP3's Xing header has a fixed 9-byte encoder field that reads `Lavf`
+whatever we do (`mp3enc.c:257`) — readers key gapless delay/padding detection
+off it. For the same reason a FLAC's Vorbis vendor field cannot be empty; under
+bitexact it reads `ffmpeg` instead of the version (`flacenc.c:66`).
+
+`FlowyFfmpegMetadataTest` proves all of this on a device, in both directions,
+against a fixture that really does carry the four MP4 tags.
 
 Two things this wrapper deliberately does *not* do, so that a later caller does
 not discover them the hard way:
@@ -244,6 +296,14 @@ a FLAC that still decodes, and a 5.1 E-AC-3 source reaches the FLAC encoder as
 six channels at 24 bits. Cancellation and progress are asserted there too,
 including a cancel issued from another thread while the encode is provably
 still running.
+
+`FlowyFfmpegMetadataTest` pins the metadata invariant on the same fixture: each
+operation in the default mode, asserting the caller's tags are there and none
+of the source's four MP4 tags are, then the same operations with
+`INHERIT_SOURCE_METADATA` asserting they *are* — so a parameter that had
+stopped doing anything would fail rather than pass quietly. Its assertions were
+checked by planting the failure they exist to catch: with the
+`AVFMT_FLAG_BITEXACT` line removed, five of its eight tests fail.
 
 ```bash
 cd libs && ANDROID_SERIAL=<device> ./gradlew :decent-audio-ffmpeg:connectedDebugAndroidTest

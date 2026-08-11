@@ -18,6 +18,11 @@ package com.decent.audio;
  *
  * <p>Paths are filesystem paths, not content URIs — the only protocol built
  * into these libraries is {@code file}.
+ *
+ * <p><strong>Container provenance is stripped, always.</strong> Every operation
+ * writes the caller's {@code metadata} and nothing else unless it is passed
+ * {@link #INHERIT_SOURCE_METADATA}, and none of them lets libavformat sign the
+ * output with its own {@code encoder} / {@code TSSE} / {@code ©too}.
  */
 public final class FlowyFfmpeg {
 
@@ -188,8 +193,10 @@ public final class FlowyFfmpeg {
     // metadata is a flat [key, value, key, value, …] array and may be null.
     // Keys are ffmpeg metadata keys ("title", "artist", "album",
     // "album_artist", "track", "date", …); the muxer maps them to whatever
-    // the container spells them as. Source metadata is copied first, so a
-    // key that is not overridden survives the operation.
+    // the container spells them as.
+    //
+    // By default the output carries exactly those tags and NOTHING else —
+    // see INHERIT_SOURCE_METADATA / STRIP_SOURCE_METADATA below.
     //
     // coverPath may be null. When set it must point at a JPEG or PNG file;
     // it is attached as a cover picture (MP4 `covr`, FLAC PICTURE block,
@@ -197,8 +204,42 @@ public final class FlowyFfmpeg {
     // verbatim, which is why no image encoder needs to be built in.
 
     /**
+     * Pass as {@code inheritSourceMetadata} to copy the source's container and
+     * stream tags into the output underneath the caller's own.
+     *
+     * <p>Only in this mode does an <em>empty value</em> in {@code metadata}
+     * mean anything: it removes the inherited key. With
+     * {@link #STRIP_SOURCE_METADATA} there is nothing to remove, and an empty
+     * value simply writes nothing.
+     *
+     * <p>Sound reasons to want it are rare — the caller of this library knows
+     * the track's tags from the catalogue, not from the file it downloaded.
+     */
+    public static final boolean INHERIT_SOURCE_METADATA = true;
+
+    /**
+     * The default: the output carries the caller's {@code metadata} and nothing
+     * else. No container dictionary, no stream dictionary, and no stamp from
+     * libavformat either.
+     *
+     * <p>This is an invariant of the download pipeline, not a preference. An
+     * MP4 from a streaming platform carries {@code major_brand},
+     * {@code minor_version}, {@code compatible_brands} and {@code encoder} at
+     * container level; inherited into a FLAC they become Vorbis comments and
+     * stay in the user's library forever. They can also be false: a Dolby Atmos
+     * source downmixed to plain 5.1 still carries
+     * {@code compatible_brands=mp42dby1} — a text tag claiming Dolby about
+     * audio that is no longer Dolby. A tag that lies about the file is worse
+     * than a missing one.
+     */
+    public static final boolean STRIP_SOURCE_METADATA = false;
+
+    /**
      * Stream copy: demux the first audio stream of {@code srcPath} and mux it,
      * bit-identical, into {@code dstPath}. No decode, no re-encode.
+     *
+     * <p>The output's tags are {@code metadata} and nothing else — see
+     * {@link #STRIP_SOURCE_METADATA}.
      *
      * @param muxer ffmpeg muxer name — {@code "flac"}, {@code "mp4"},
      *              {@code "ipod"} (M4A), {@code "mp3"}, {@code "wav"} — or
@@ -208,7 +249,22 @@ public final class FlowyFfmpeg {
      */
     public static int remux(String srcPath, String dstPath, String muxer,
                             String[] metadata, String coverPath) {
-        return remux(srcPath, dstPath, muxer, metadata, coverPath, null, null);
+        return remux(srcPath, dstPath, muxer, metadata, coverPath,
+                STRIP_SOURCE_METADATA, null, null);
+    }
+
+    /**
+     * {@link #remux(String, String, String, String[], String)} with the
+     * source's own tags kept or dropped explicitly.
+     *
+     * @param inheritSourceMetadata {@link #INHERIT_SOURCE_METADATA} or
+     *                              {@link #STRIP_SOURCE_METADATA}.
+     */
+    public static int remux(String srcPath, String dstPath, String muxer,
+                            String[] metadata, String coverPath,
+                            boolean inheritSourceMetadata) {
+        return remux(srcPath, dstPath, muxer, metadata, coverPath,
+                inheritSourceMetadata, null, null);
     }
 
     /**
@@ -223,12 +279,22 @@ public final class FlowyFfmpeg {
     public static int remux(String srcPath, String dstPath, String muxer,
                             String[] metadata, String coverPath,
                             Job job, ProgressListener progress) {
+        return remux(srcPath, dstPath, muxer, metadata, coverPath,
+                STRIP_SOURCE_METADATA, job, progress);
+    }
+
+    /** The full form: metadata policy, cancellation and progress. */
+    public static int remux(String srcPath, String dstPath, String muxer,
+                            String[] metadata, String coverPath,
+                            boolean inheritSourceMetadata,
+                            Job job, ProgressListener progress) {
         return nativeRemux(srcPath, dstPath, muxer, metadata, coverPath,
-                handleOf(job), progress);
+                inheritSourceMetadata, handleOf(job), progress);
     }
 
     private static native int nativeRemux(String srcPath, String dstPath, String muxer,
                                           String[] metadata, String coverPath,
+                                          boolean inheritSourceMetadata,
                                           long jobHandle, ProgressListener progress);
 
     /**
@@ -236,12 +302,27 @@ public final class FlowyFfmpeg {
      * constant bitrate. More than two channels are downmixed to stereo and a
      * sample rate libmp3lame cannot take is resampled, both by libswresample.
      *
+     * <p>The output's tags are {@code metadata} and nothing else — see
+     * {@link #STRIP_SOURCE_METADATA}.
+     *
      * @param bitrateKbps e.g. {@code 320}.
      * @return {@link #OK}, or non-zero on failure.
      */
     public static int encodeMp3(String srcPath, String dstPath, int bitrateKbps,
                                 String[] metadata, String coverPath) {
-        return encodeMp3(srcPath, dstPath, bitrateKbps, metadata, coverPath, null, null);
+        return encodeMp3(srcPath, dstPath, bitrateKbps, metadata, coverPath,
+                STRIP_SOURCE_METADATA, null, null);
+    }
+
+    /**
+     * {@link #encodeMp3(String, String, int, String[], String)} with the
+     * source's own tags kept or dropped explicitly.
+     */
+    public static int encodeMp3(String srcPath, String dstPath, int bitrateKbps,
+                                String[] metadata, String coverPath,
+                                boolean inheritSourceMetadata) {
+        return encodeMp3(srcPath, dstPath, bitrateKbps, metadata, coverPath,
+                inheritSourceMetadata, null, null);
     }
 
     /**
@@ -253,16 +334,31 @@ public final class FlowyFfmpeg {
     public static int encodeMp3(String srcPath, String dstPath, int bitrateKbps,
                                 String[] metadata, String coverPath,
                                 Job job, ProgressListener progress) {
+        return encodeMp3(srcPath, dstPath, bitrateKbps, metadata, coverPath,
+                STRIP_SOURCE_METADATA, job, progress);
+    }
+
+    /** The full form: metadata policy, cancellation and progress. */
+    public static int encodeMp3(String srcPath, String dstPath, int bitrateKbps,
+                                String[] metadata, String coverPath,
+                                boolean inheritSourceMetadata,
+                                Job job, ProgressListener progress) {
         return nativeEncodeMp3(srcPath, dstPath, bitrateKbps, metadata, coverPath,
-                handleOf(job), progress);
+                inheritSourceMetadata, handleOf(job), progress);
     }
 
     private static native int nativeEncodeMp3(String srcPath, String dstPath, int bitrateKbps,
                                               String[] metadata, String coverPath,
+                                              boolean inheritSourceMetadata,
                                               long jobHandle, ProgressListener progress);
 
     /**
      * Decode {@code srcPath} and re-encode it as FLAC at a pinned bit depth.
+     *
+     * <p>The output's tags are {@code metadata} and nothing else — see
+     * {@link #STRIP_SOURCE_METADATA}. This is the operation the invariant was
+     * written for: a Vorbis comment block is happy to carry
+     * {@code major_brand} or {@code compatible_brands} verbatim out of an MP4.
      *
      * @param bitsPerSample {@code 16} or {@code 24}. 24 encodes through
      *                      {@code AV_SAMPLE_FMT_S32} with
@@ -272,7 +368,19 @@ public final class FlowyFfmpeg {
      */
     public static int encodeFlac(String srcPath, String dstPath, int bitsPerSample,
                                  String[] metadata, String coverPath) {
-        return encodeFlac(srcPath, dstPath, bitsPerSample, metadata, coverPath, null, null);
+        return encodeFlac(srcPath, dstPath, bitsPerSample, metadata, coverPath,
+                STRIP_SOURCE_METADATA, null, null);
+    }
+
+    /**
+     * {@link #encodeFlac(String, String, int, String[], String)} with the
+     * source's own tags kept or dropped explicitly.
+     */
+    public static int encodeFlac(String srcPath, String dstPath, int bitsPerSample,
+                                 String[] metadata, String coverPath,
+                                 boolean inheritSourceMetadata) {
+        return encodeFlac(srcPath, dstPath, bitsPerSample, metadata, coverPath,
+                inheritSourceMetadata, null, null);
     }
 
     /**
@@ -286,13 +394,24 @@ public final class FlowyFfmpeg {
     public static int encodeFlac(String srcPath, String dstPath, int bitsPerSample,
                                  String[] metadata, String coverPath,
                                  Job job, ProgressListener progress) {
+        return encodeFlac(srcPath, dstPath, bitsPerSample, metadata, coverPath,
+                STRIP_SOURCE_METADATA, job, progress);
+    }
+
+    /** The full form: metadata policy, cancellation and progress. */
+    public static int encodeFlac(String srcPath, String dstPath, int bitsPerSample,
+                                 String[] metadata, String coverPath,
+                                 boolean inheritSourceMetadata,
+                                 Job job, ProgressListener progress) {
         return nativeEncodeFlac(srcPath, dstPath, bitsPerSample, metadata, coverPath,
-                handleOf(job), progress);
+                inheritSourceMetadata, handleOf(job), progress);
     }
 
     private static native int nativeEncodeFlac(String srcPath, String dstPath,
                                                int bitsPerSample, String[] metadata,
-                                               String coverPath, long jobHandle,
+                                               String coverPath,
+                                               boolean inheritSourceMetadata,
+                                               long jobHandle,
                                                ProgressListener progress);
 
     // ── Introspection and errors ─────────────────────────────────────────

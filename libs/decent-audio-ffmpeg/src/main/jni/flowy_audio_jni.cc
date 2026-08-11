@@ -21,6 +21,13 @@
 // Sample format / sample rate / channel layout conversion between a decoder's
 // output and an encoder's input is exactly libswresample's job, and swresample
 // IS enabled. So the binding is typed instead of string-array shaped.
+//
+// CONTAINER PROVENANCE IS STRIPPED, ALWAYS
+// ----------------------------------------
+// The output carries the caller's tags and nothing else unless the caller
+// explicitly asks for the source's (inheritSourceMetadata). It also carries no
+// stamp from libavformat: see applyMetadata() and openOutput() for the two
+// halves of that and for why the default is the way round it is.
 
 #include <jni.h>
 
@@ -395,15 +402,25 @@ int writeCoverPacket(AVFormatContext *oc, int streamIndex, const Cover &cover) {
 
 // ── Metadata ────────────────────────────────────────────────────────────
 
-// Source metadata first, caller overrides on top: a key the caller does not
-// mention survives the operation instead of being silently dropped.
+// The output carries what the caller passed, and — only when it asks for it —
+// the source's tags underneath.
+//
+// Inheriting is OFF by default because the source of this pipeline is an MP4
+// from a streaming platform, and an MP4's container tags are provenance, not
+// description: major_brand, minor_version, compatible_brands, encoder. Copied
+// into a FLAC they become Vorbis comments and stay in the user's library
+// forever. Worse, they can be false: a Dolby Atmos source downmixed to plain
+// 5.1 still carries compatible_brands=mp42dby1, i.e. a text tag claiming Dolby
+// about audio that no longer is. A tag that lies is worse than a missing one.
+//
+// `inherited` is therefore nullptr unless the caller opted in.
 void applyMetadata(AVFormatContext *oc, AVDictionary *inherited,
                    const std::vector<std::string> &pairs) {
     if (inherited != nullptr) av_dict_copy(&oc->metadata, inherited, 0);
     for (size_t i = 0; i + 1 < pairs.size(); i += 2) {
         if (pairs[i].empty()) continue;
-        // An empty value means "remove this key", which is how a caller drops
-        // a tag inherited from the source.
+        // An empty value means "remove this key" — meaningful only when
+        // something was inherited for it to remove.
         av_dict_set(&oc->metadata, pairs[i].c_str(),
                     pairs[i + 1].empty() ? nullptr : pairs[i + 1].c_str(), 0);
     }
@@ -506,6 +523,27 @@ int openOutput(const char *path, const char *muxer, Output *out, Job *job) {
         out->fmt->interrupt_callback.callback = interruptCallback;
         out->fmt->interrupt_callback.opaque = job;
     }
+    // Do not let libavformat sign the file. Without this, mux.c's init_muxer
+    // writes encoder=LIBAVFORMAT_IDENT into the output's metadata (mux.c:352,
+    // with flags 0, so it overwrites — a caller cannot pre-empt it), which the
+    // FLAC muxer then emits as a Vorbis comment and the MP3 muxer as a TSSE
+    // frame; movenc adds a "\251too" atom of its own on top (movenc.c:4764).
+    // That stamp is the same class of harm as an inherited container tag: it
+    // describes the tool, not the music, and it is what the reference files
+    // this library replaces were carrying (encoder=Lavf61.7.103).
+    //
+    // AVFMT_FLAG_BITEXACT is the only switch for it. For the four muxers this
+    // build has it does nothing else: flacenc writes "ffmpeg" instead of the
+    // version as the Vorbis vendor field (flacenc.c:66 — the field is
+    // structural and cannot be empty), movenc skips "\251too" and its psp/sv3d
+    // identification, and mp3enc has no bitexact branch at all. Notably it is
+    // NOT set on the encoders, so libmp3lame's DSP path is untouched.
+    //
+    // One consequence to know: under this flag libavformat also DELETES an
+    // "encoder" key the caller set. For MP4 the writable equivalent is
+    // "encoding_tool"; the MP3 Xing header's fixed 9-byte encoder field stays
+    // "Lavf" because readers key gapless delay/padding detection off it.
+    out->fmt->flags |= AVFMT_FLAG_BITEXACT;
     return 0;
 }
 
@@ -656,7 +694,7 @@ int writePacket(Output *out, AVPacket *pkt, AVRational from, AVStream *st) {
 
 int doRemux(const char *src, const char *dst, const char *muxer,
             const std::vector<std::string> &metadata, const char *coverPath,
-            const Control &ctl) {
+            bool inheritMetadata, const Control &ctl) {
     Input in;
     int ret = openInput(src, &in, ctl.job);
     if (ret < 0) return ret;
@@ -682,7 +720,10 @@ int doRemux(const char *src, const char *dst, const char *muxer,
     // the destination does not define.
     ost->codecpar->codec_tag = 0;
     ost->time_base = ist->time_base;
-    av_dict_copy(&ost->metadata, ist->metadata, 0);
+    // Stream-level tags are provenance too — an MP4 audio track carries
+    // handler_name ("SoundHandler", or the encoding tool's own name) and
+    // vendor_id — so they ride only in inheriting mode, like the container's.
+    if (inheritMetadata) av_dict_copy(&ost->metadata, ist->metadata, 0);
 
     Cover cover;
     int coverIndex = -1;
@@ -692,7 +733,7 @@ int doRemux(const char *src, const char *dst, const char *muxer,
         if (coverIndex < 0) return coverIndex;
     }
 
-    applyMetadata(out.fmt, in.fmt->metadata, metadata);
+    applyMetadata(out.fmt, inheritMetadata ? in.fmt->metadata : nullptr, metadata);
 
     ret = openOutputFile(&out, dst, ctl.job);
     if (ret < 0) return ret;
@@ -815,7 +856,7 @@ int drainFifo(AVAudioFifo *fifo, AVCodecContext *enc, Output *out, AVStream *ost
 
 int doTranscode(const char *src, const char *dst, const char *muxer,
                 const EncoderSpec &spec, const std::vector<std::string> &metadata,
-                const char *coverPath, const Control &ctl) {
+                const char *coverPath, bool inheritMetadata, const Control &ctl) {
     Input in;
     int ret = openInput(src, &in, ctl.job);
     if (ret < 0) return ret;
@@ -906,7 +947,11 @@ int doTranscode(const char *src, const char *dst, const char *muxer,
         return ret;
     }
     ost->time_base = enc->time_base;
-    av_dict_copy(&ost->metadata, ist->metadata, 0);
+    // See doRemux: the source stream's tags are provenance. One of them is
+    // load-bearing for the MP3 muxer — mp3enc.c:149 reads the stream's
+    // "encoder" key for the Xing header's 9-byte encoder field — so leaving it
+    // out is also what keeps the source's encoder name out of that field.
+    if (inheritMetadata) av_dict_copy(&ost->metadata, ist->metadata, 0);
 
     Cover cover;
     int coverIndex = -1;
@@ -916,7 +961,7 @@ int doTranscode(const char *src, const char *dst, const char *muxer,
         if (coverIndex < 0) return coverIndex;
     }
 
-    applyMetadata(out.fmt, in.fmt->metadata, metadata);
+    applyMetadata(out.fmt, inheritMetadata ? in.fmt->metadata : nullptr, metadata);
 
     ret = openOutputFile(&out, dst, ctl.job);
     if (ret < 0) return ret;
@@ -1183,8 +1228,8 @@ struct Held {
 extern "C" JNIEXPORT jint JNICALL
 Java_com_decent_audio_FlowyFfmpeg_nativeRemux(JNIEnv *env, jclass, jstring jsrc, jstring jdst,
                                               jstring jmuxer, jobjectArray jmeta,
-                                              jstring jcover, jlong jjob,
-                                              jobject jprogress) {
+                                              jstring jcover, jboolean jinherit,
+                                              jlong jjob, jobject jprogress) {
     clearError();
     JString src(env, jsrc);
     JString dst(env, jdst);
@@ -1201,14 +1246,16 @@ Java_com_decent_audio_FlowyFfmpeg_nativeRemux(JNIEnv *env, jclass, jstring jsrc,
     }
     std::vector<std::string> metadata = toStringVector(env, jmeta);
     return doRemux(src.c_str(), dst.c_str(), muxer.empty() ? nullptr : muxer.c_str(),
-                   metadata, cover.empty() ? nullptr : cover.c_str(), held.control());
+                   metadata, cover.empty() ? nullptr : cover.c_str(),
+                   jinherit == JNI_TRUE, held.control());
 }
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_decent_audio_FlowyFfmpeg_nativeEncodeMp3(JNIEnv *env, jclass, jstring jsrc,
                                                   jstring jdst, jint bitrateKbps,
                                                   jobjectArray jmeta, jstring jcover,
-                                                  jlong jjob, jobject jprogress) {
+                                                  jboolean jinherit, jlong jjob,
+                                                  jobject jprogress) {
     clearError();
     JString src(env, jsrc);
     JString dst(env, jdst);
@@ -1229,14 +1276,16 @@ Java_com_decent_audio_FlowyFfmpeg_nativeEncodeMp3(JNIEnv *env, jclass, jstring j
     spec.maxChannels = 2; // libmp3lame is mono or stereo; anything wider is downmixed
     std::vector<std::string> metadata = toStringVector(env, jmeta);
     return doTranscode(src.c_str(), dst.c_str(), "mp3", spec, metadata,
-                       cover.empty() ? nullptr : cover.c_str(), held.control());
+                       cover.empty() ? nullptr : cover.c_str(),
+                       jinherit == JNI_TRUE, held.control());
 }
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_decent_audio_FlowyFfmpeg_nativeEncodeFlac(JNIEnv *env, jclass, jstring jsrc,
                                                    jstring jdst, jint bitsPerSample,
                                                    jobjectArray jmeta, jstring jcover,
-                                                   jlong jjob, jobject jprogress) {
+                                                   jboolean jinherit, jlong jjob,
+                                                   jobject jprogress) {
     clearError();
     JString src(env, jsrc);
     JString dst(env, jdst);
@@ -1264,7 +1313,8 @@ Java_com_decent_audio_FlowyFfmpeg_nativeEncodeFlac(JNIEnv *env, jclass, jstring 
     spec.maxChannels = 8; // FLAC's own ceiling
     std::vector<std::string> metadata = toStringVector(env, jmeta);
     return doTranscode(src.c_str(), dst.c_str(), "flac", spec, metadata,
-                       cover.empty() ? nullptr : cover.c_str(), held.control());
+                       cover.empty() ? nullptr : cover.c_str(),
+                       jinherit == JNI_TRUE, held.control());
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
