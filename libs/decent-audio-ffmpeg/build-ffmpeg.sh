@@ -347,3 +347,24 @@ for ABI in arm64-v8a armeabi-v7a x86_64 x86; do
 done
 
 [ "$FAIL" -eq 0 ] || { echo; echo "ERROR: verification failed (see above)" >&2; exit 1; }
+
+# The completion marker, written LAST — after every ABI is built and after
+# every check above has passed.
+#
+# CI caches prebuilt/, and actions/cache's post step runs on a FAILED job too.
+# A run that died partway through (say at the third ABI) therefore saves a
+# two-ABI tree under the key, and every later run restores it, decides the
+# build is already done, and fails at CMake for the missing ABI — with no way
+# out that does not involve evicting the cache by hand. Presence of any
+# particular library is not evidence the build finished; presence of this file
+# is, because nothing else creates it and `rm -rf "$OUT"` at the top of this
+# script removes it before anything is rebuilt.
+# Written with content rather than touched empty: the workflow gates its cache
+# SAVE on hashFiles() of this path, which reports nothing for a match it cannot
+# hash.
+{
+  echo "built $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "abis arm64-v8a armeabi-v7a x86_64 x86"
+} > "$OUT/.complete"
+echo
+echo "prebuilt/ is complete (marker written)"

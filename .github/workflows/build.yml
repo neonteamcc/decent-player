@@ -10,6 +10,12 @@ permissions:
   contents: read
   packages: write
 
+env:
+  # One source for the NDK revision: it is installed with it, built with it,
+  # and — critically — the FFmpeg cache is keyed on it. Bumping the NDK in one
+  # place used to leave the cache serving libraries built by the old one.
+  NDK_VERSION: "29.0.14206865"
+
 jobs:
   libs:
     runs-on: ubuntu-latest
@@ -24,7 +30,7 @@ jobs:
       - uses: android-actions/setup-android@v3
 
       - name: Install NDK and CMake
-        run: sdkmanager "platforms;android-36" "ndk;29.0.14206865" "cmake;3.22.1"
+        run: sdkmanager "platforms;android-36" "ndk;${{ env.NDK_VERSION }}" "cmake;3.22.1"
 
       # libFLAC sources are not vendored (BSD upstream, cloned at build
       # time) — required by both the decoder-flac module and the driver's
@@ -53,30 +59,52 @@ jobs:
             libs/decent-media3-decoder-flac/src/test/cpp/seek_table_sanitize_test.cc
           /tmp/seek_table_sanitize_test
 
-      # Four ABIs of FFmpeg + LAME take tens of minutes, so the result is
-      # cached. The key hashes both scripts: a corrected build script must
-      # never be served artifacts produced by the old one, and setup.sh is in
-      # the key because it pins the upstream revisions.
-      - name: Cache FFmpeg build
-        uses: actions/cache@v4
+      # The FFmpeg build for four ABIs is cached. RESTORE ONLY here — the save
+      # is a separate step below, deliberately.
+      #
+      # actions/cache's own post step runs on a FAILED job too. With the
+      # combined action, a run that died at the third ABI still wrote a
+      # two-ABI prebuilt/ under this key, and every later run then restored it,
+      # skipped the build, and failed at CMake for the ABI that was never
+      # built — permanently, until someone evicted the cache by hand.
+      #
+      # The key hashes both scripts (a corrected build script must never be
+      # served artifacts produced by the old one; setup.sh pins the upstream
+      # revisions) and the NDK revision that compiled them.
+      - name: Restore FFmpeg build from cache
+        id: ffmpeg-cache
+        uses: actions/cache/restore@v4
         with:
           path: libs/decent-audio-ffmpeg/prebuilt
-          key: ffmpeg-${{ runner.os }}-${{ hashFiles('libs/decent-audio-ffmpeg/build-ffmpeg.sh', 'libs/decent-audio-ffmpeg/setup.sh') }}
+          key: ffmpeg-${{ runner.os }}-ndk${{ env.NDK_VERSION }}-${{ hashFiles('libs/decent-audio-ffmpeg/build-ffmpeg.sh', 'libs/decent-audio-ffmpeg/setup.sh') }}
 
-      # Skipped when the cache hit: build-ffmpeg.sh starts with `rm -rf
-      # prebuilt`, so running it on a restored tree would throw the cache away
-      # and rebuild for nothing.
+      # The skip is gated on prebuilt/.complete, which build-ffmpeg.sh writes
+      # only after the last ABI and the leak scan. A tree that merely contains
+      # libavcodec.so proves nothing about the other three ABIs.
       - name: Fetch and build FFmpeg (audio-only)
         working-directory: libs/decent-audio-ffmpeg
         env:
-          ANDROID_NDK_ROOT: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
         run: |
-          if [ -f prebuilt/arm64-v8a/lib/libavcodec.so ]; then
-            echo "prebuilt/ restored from cache; skipping the FFmpeg build"
+          if [ -f prebuilt/.complete ]; then
+            echo "prebuilt/ restored from cache and complete; skipping the FFmpeg build"
             exit 0
+          fi
+          if [ -d prebuilt ]; then
+            echo "prebuilt/ exists but carries no completion marker — rebuilding"
           fi
           bash setup.sh
           bash build-ffmpeg.sh
+
+      # Only a build that finished is worth keeping. `if: success()` covers the
+      # failure case; the marker check covers a build-ffmpeg.sh that somehow
+      # returned 0 without completing.
+      - name: Save FFmpeg build to cache
+        if: success() && steps.ffmpeg-cache.outputs.cache-hit != 'true' && hashFiles('libs/decent-audio-ffmpeg/prebuilt/.complete') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: libs/decent-audio-ffmpeg/prebuilt
+          key: ${{ steps.ffmpeg-cache.outputs.cache-primary-key }}
 
       - name: Build release AARs
         working-directory: libs
