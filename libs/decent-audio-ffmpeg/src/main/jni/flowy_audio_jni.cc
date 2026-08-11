@@ -318,14 +318,22 @@ int openInput(const char *path, Input *in) {
 
 struct Output {
     AVFormatContext *fmt = nullptr;
-    bool headerWritten = false;
+    std::string path;
+    bool opened = false;    // we created the destination file
+    bool completed = false; // av_write_trailer returned successfully
 
+    // A half-written destination left behind by a failed job is worse than no
+    // destination at all: it looks like a converted track to anything that
+    // only stats the path. Only a file this object created is removed, so a
+    // failure that never got as far as opening the output cannot delete
+    // something that was already there.
     ~Output() {
         if (fmt == nullptr) return;
         if (fmt->pb != nullptr && !(fmt->oformat->flags & AVFMT_NOFILE)) {
             avio_closep(&fmt->pb);
         }
         avformat_free_context(fmt);
+        if (opened && !completed && !path.empty()) remove(path.c_str());
     }
 };
 
@@ -342,8 +350,13 @@ int openOutput(const char *path, const char *muxer, Output *out) {
 int openOutputFile(Output *out, const char *path) {
     if (out->fmt->oformat->flags & AVFMT_NOFILE) return 0;
     int ret = avio_open(&out->fmt->pb, path, AVIO_FLAG_WRITE);
-    if (ret < 0) setError(ret, "cannot write %s", path);
-    return ret;
+    if (ret < 0) {
+        setError(ret, "cannot write %s", path);
+        return ret;
+    }
+    out->path = path;
+    out->opened = true;
+    return 0;
 }
 
 // ── Encoder configuration ───────────────────────────────────────────────
@@ -520,7 +533,6 @@ int doRemux(const char *src, const char *dst, const char *muxer,
         setError(ret, "the %s muxer refused the header", out.fmt->oformat->name);
         return ret;
     }
-    out.headerWritten = true;
 
     if (coverIndex >= 0) {
         ret = writeCoverPacket(out.fmt, coverIndex, cover);
@@ -546,8 +558,12 @@ int doRemux(const char *src, const char *dst, const char *muxer,
     }
 
     ret = av_write_trailer(out.fmt);
-    if (ret < 0) setError(ret, "closing %s failed", dst);
-    return ret;
+    if (ret < 0) {
+        setError(ret, "closing %s failed", dst);
+        return ret;
+    }
+    out.completed = true;
+    return 0;
 }
 
 // ── Operation: decode -> encode ─────────────────────────────────────────
@@ -725,7 +741,6 @@ int doTranscode(const char *src, const char *dst, const char *muxer,
         setError(ret, "the %s muxer refused the header", out.fmt->oformat->name);
         return ret;
     }
-    out.headerWritten = true;
 
     if (coverIndex >= 0) {
         ret = writeCoverPacket(out.fmt, coverIndex, cover);
@@ -861,8 +876,12 @@ int doTranscode(const char *src, const char *dst, const char *muxer,
     if (ret < 0) return ret;
 
     ret = av_write_trailer(out.fmt);
-    if (ret < 0) setError(ret, "closing %s failed", dst);
-    return ret;
+    if (ret < 0) {
+        setError(ret, "closing %s failed", dst);
+        return ret;
+    }
+    out.completed = true;
+    return 0;
 }
 
 } // namespace

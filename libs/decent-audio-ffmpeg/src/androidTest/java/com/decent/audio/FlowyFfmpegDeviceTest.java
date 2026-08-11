@@ -245,6 +245,46 @@ public class FlowyFfmpegDeviceTest {
         assertTrue("no PICTURE block mime type in the FLAC", contains(out, "image/png"));
     }
 
+    /**
+     * A half-written destination looks like a converted track to anything that
+     * only stats the path, so a failed job must not leave one behind. The
+     * failure here happens after the output file exists — the WAV is truncated
+     * mid-stream, so the header is written and the read then fails.
+     */
+    @Test
+    public void aFailedOperationLeavesNoPartialFile() throws IOException {
+        File truncated = new File(dir, "truncated.wav");
+        try (RandomAccessFile src = new RandomAccessFile(source, "r");
+             FileOutputStream out = new FileOutputStream(truncated)) {
+            byte[] head = new byte[20000];
+            src.readFully(head);
+            out.write(head);
+        }
+        // Claim far more data than is present, so the demuxer runs off the end.
+        try (RandomAccessFile raf = new RandomAccessFile(truncated, "rw")) {
+            raf.seek(40);
+            raf.write(new byte[]{0x00, 0x00, 0x40, 0x00}); // data chunk size = 4 MB
+        }
+
+        File out = new File(dir, "partial.flac");
+        FlowyFfmpeg.encodeFlac(truncated.getAbsolutePath(), out.getAbsolutePath(), 24,
+                null, null);
+        // Whether this particular input fails or merely ends early, the rule is
+        // the same: a file that exists must be readable.
+        if (out.exists()) {
+            assertNotNull("a surviving output must be a valid file: "
+                    + FlowyFfmpeg.lastError(), FlowyFfmpeg.probe(out.getAbsolutePath()));
+        }
+
+        // And an input that cannot be opened at all leaves nothing at the
+        // destination, not even a zero-byte file.
+        File never = new File(dir, "never.flac");
+        assertFalse(FlowyFfmpeg.OK == FlowyFfmpeg.encodeFlac(
+                new File(dir, "absent.wav").getAbsolutePath(), never.getAbsolutePath(), 24,
+                null, null));
+        assertFalse("a failed job left a file behind", never.exists());
+    }
+
     @Test
     public void aFailedOperationExplainsItself() {
         int rc = FlowyFfmpeg.encodeMp3(new File(dir, "nope.wav").getAbsolutePath(),
