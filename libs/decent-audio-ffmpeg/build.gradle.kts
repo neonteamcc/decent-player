@@ -25,6 +25,13 @@ android {
         }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // The keep rules ride INSIDE the AAR (they land as proguard.txt), so an
+        // app that adds this dependency inherits them and cannot forget them.
+        // The native code constructs FlowyFfmpeg$AudioInfo by name; a consumer
+        // minifying without these rules gets a release-only crash on the first
+        // probe() and nothing at all in debug.
+        consumerProguardFiles("consumer-rules.pro")
     }
 
     ndkVersion = "29.0.14206865"
