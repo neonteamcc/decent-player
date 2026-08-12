@@ -4,11 +4,11 @@
  *
  * WHY THIS EXISTS
  * ---------------
- * armeabi-v7a is the one shipped ABI that no device in the maintainer's hands
- * can execute, and Apple silicon cannot run AArch32 at all. It was built four
- * times over and never once *run*. This harness runs it: it links against the
- * armeabi-v7a libraries this module just produced and exercises them under
- * emulation, on the same runner that built them.
+ * armeabi-v7a is the one shipped ABI no device available here can execute, and
+ * Apple silicon cannot run AArch32 at all. It was built four times over and
+ * never once *run*. This harness runs it: it links against the armeabi-v7a
+ * libraries this module just produced and exercises them under emulation, on
+ * the same runner that built them.
  *
  * WHAT IT PROVES
  * --------------
@@ -24,17 +24,19 @@
  * Nothing about Android's dynamic loader: page alignment, SONAMEs and
  * DT_NEEDED resolution inside an app's lib dir are not exercised here, because
  * a static link is the only way to run a bionic binary under qemu-user (there
- * is no bionic linker to give it). Nor is the JNI wiring exercised. Both are
- * largely ABI-independent for this module — build-ffmpeg.sh asserts the
- * alignment and SONAME properties for all four ABIs, and flowy_audio_jni.cc is
- * one source file compiled per ABI — so the residual risk is small but real.
- * Closing it means running src/androidTest/ on a physical arm32 device
- * (Firebase Test Lab), which is a separate decision.
+ * is no bionic linker to give it). Nor is the JNI wiring exercised, nor any
+ * defect a shared link alone can produce. All three are largely
+ * ABI-independent for this module — build-ffmpeg.sh asserts the alignment and
+ * SONAME properties on the shipped .so files for all four ABIs, and
+ * flowy_audio_jni.cc is one source file compiled per ABI — so the residual
+ * risk is small but real. Closing it means running src/androidTest/ on a
+ * physical arm32 device (Firebase Test Lab), which is a separate decision.
  *
  * The archives linked here come from the same objects as the shipped .so
  * files: one `make` compiles each object once (PIC) and both --enable-shared
  * and --enable-static are served from it. So the code under test is the code
- * that ships; only the link step differs.
+ * that ships; only the link step differs — which is exactly the residual
+ * named above, not a claim that nothing differs.
  *
  * Failure style follows build-ffmpeg.sh: every check reports, indented, on
  * stderr, and the run ends with one ERROR line and a non-zero exit — so a
@@ -92,7 +94,9 @@ static void fail(const char *fmt, ...)
 /* ------------------------------------------------------------------------ */
 /* The codec set, at run time                                               */
 /*                                                                          */
-/* Mirrors REQUIRED_COMPONENTS / FORBIDDEN_COMPONENTS in build-ffmpeg.sh.    */
+/* Mirrors REQUIRED_COMPONENTS / FORBIDDEN_COMPONENTS in build-ffmpeg.sh,    */
+/* all 25 of them — FILE_PROTOCOL is the one that is not a codec, so it is   */
+/* looked up through avio rather than avcodec (see check_codec_set).         */
 /* That script asserts them on config_components.h, i.e. on what configure   */
 /* said it would build; this asserts the same list on what the linked        */
 /* library actually offers on this ABI.                                     */
@@ -139,6 +143,16 @@ static void check_codec_set(void)
         else
             av_parser_close(p);
     }
+
+    /* CONFIG_FILE_PROTOCOL. Every fixture below opens a bare path and so
+     * exercises it implicitly, but implicitly is not by name: avio's lookup
+     * searches the protocols that were actually compiled in and returns NULL
+     * when file is not among them, which is the same kind of evidence as the
+     * avcodec_find_*_by_name calls above. Without it this list would mirror 24
+     * of build-ffmpeg.sh's 25 components while claiming to mirror all of them. */
+    n++;
+    if (!avio_find_protocol_name("file:"))
+        fail("MISSING  protocol file");
 
     /* Negative controls, verbatim from build-ffmpeg.sh's FORBIDDEN_COMPONENTS.
      * These are the codecs whose descriptor long_names are in the binary

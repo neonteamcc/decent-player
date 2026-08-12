@@ -72,7 +72,10 @@ An app that splits by ABI ships one column, not the sum.
 in all twenty files is aligned to `0x4000`: the wrapper's `CMakeLists.txt`
 passes `-Wl,-z,max-page-size=16384` for the same reason `build-ffmpeg.sh` does,
 and it is not optional here — a wrapper without it fails to load beside
-libraries that have it on an Android 15+ device with 16 KB pages.
+libraries that have it on an Android 15+ device with 16 KB pages. For the
+sixteen prebuilt libraries that is asserted on every build (see "Verifying a
+build"); the wrapper's own four are measured, not asserted, because AGP links
+them.
 
 ## The JNI surface, and why it is not a command line
 
@@ -318,13 +321,35 @@ It is not in CI: the FFmpeg build already dominates the job, and the x86_64
 emulator a GitHub runner can host is not the ABI the fleet uses. Run it against
 an arm64 emulator or a real device when the wrapper or the codec set changes.
 
+Four shared libraries per ABI, and nothing else to package. LAME is staged
+into the ffmpeg source tree (`upstream/ffmpeg/deps/<abi>/`) rather than into
+the published prefix, so `libmp3lame.a` and `lame/*.h` never appear in
+`prebuilt/` at all — it is a build-time input that has already been folded
+into `libavcodec.so`, and nothing downstream should be able to link it a
+second time. Beyond the four, the only `DT_NEEDED` entries are `libm`,
+`libz`, `libc` — all Android platform libraries, nothing extra to ship.
+
+`lib/pkgconfig/` and `share/` are deleted after each ABI. The `.pc` files
+have no consumer (consumers link these libraries by explicit path, not
+through pkg-config) and their `prefix=` line is an absolute build path;
+`share/` is ffmpeg's example `.c` files plus LAME's man page, which
+`--disable-doc` does not suppress and which would otherwise be published
+four times over.
+
+The licence texts travel with the binaries: shipping shared libraries is
+how the LGPL's relinking requirement is satisfied here, and the notice is
+the other half of that obligation.
+
+Pinned upstream revisions live at the top of `setup.sh`: FFmpeg `n8.1.2` and
+LAME `3.100`.
+
 ## The arm32 smoke test
 
 `arm64-v8a` is proven — an emulator run with 16 KB pages, then two real phones
 in the field. **`armeabi-v7a` was built four times over and never once run.**
-The maintainer owns no 32-bit device, and Apple silicon cannot execute AArch32
-at all, so a local emulator would be full-system emulation rather than a
-practical route. CI runs it instead, on every push, in under a second:
+No 32-bit device is available, and Apple silicon cannot execute AArch32 at all,
+so a local emulator would be full-system emulation rather than a practical
+route. CI runs it instead, on every push, in under a second:
 
 ```bash
 ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/29.0.14206865 bash arm32-smoke.sh
@@ -360,13 +385,16 @@ ARM assembly is intact, the link is complete, the codecs are there. That is
 where this actually breaks.
 
 **What it does not prove:** anything about Android's dynamic loader — page
-alignment, SONAMEs, `DT_NEEDED` resolution inside the app's lib dir — or the
-JNI wiring. The harness is linked *statically*, which is not a shortcut but the
-only option: qemu-user has no bionic dynamic linker to hand a shared-linked
-Android binary. Those properties are asserted for all four ABIs by
-`build-ffmpeg.sh`, and the JNI is one source file compiled per ABI, so the gap
-is narrow. Closing it means running `src/androidTest/` on a physical arm32
-device (Firebase Test Lab) — a separate decision.
+alignment, SONAMEs, `DT_NEEDED` resolution inside the app's lib dir — the JNI
+wiring, or any defect only a shared link can produce. The harness is linked
+*statically*, which is not a shortcut but the only option: qemu-user has no
+bionic dynamic linker to hand a shared-linked Android binary. The loader
+properties are asserted on the shipped `.so` files for all four ABIs by
+`build-ffmpeg.sh` — an unversioned SONAME, and every `LOAD` segment aligned to
+`0x4000` so that a 16 KB-page device can map them — and the JNI is one source
+file compiled per ABI, so the gap is narrow. Closing it means running
+`src/androidTest/` on a physical arm32 device (Firebase Test Lab) — a separate
+decision.
 
 The archives it links are not a second build: one `make` compiles each object
 once (PIC, because `--enable-shared` demands it) and both forms come from those
@@ -380,31 +408,16 @@ scan. They are stripped of debug info on the way out for the same reason.
 One host-dependent thing to know if you run it outside CI: a 32-bit Android
 binary sets `personality(PER_LINUX32)` before `main()`, and an **arm64 kernel
 refuses that** unless the CPU has 32-bit EL0 — Apple silicon has none. So it
-aborts on an arm64 workstation before a single line of FFmpeg runs, and the
-script says so rather than letting it read as a build failure. x86_64 kernels
-accept it, which is what `setarch --32bit` has always relied on.
+aborts on an arm64 workstation before a single line of FFmpeg runs. x86_64
+kernels accept it, which is what `setarch --32bit` has always relied on.
 
-Four shared libraries per ABI, and nothing else to package. LAME is staged
-into the ffmpeg source tree (`upstream/ffmpeg/deps/<abi>/`) rather than into
-the published prefix, so `libmp3lame.a` and `lame/*.h` never appear in
-`prebuilt/` at all — it is a build-time input that has already been folded
-into `libavcodec.so`, and nothing downstream should be able to link it a
-second time. Beyond the four, the only `DT_NEEDED` entries are `libm`,
-`libz`, `libc` — all Android platform libraries, nothing extra to ship.
-
-`lib/pkgconfig/` and `share/` are deleted after each ABI. The `.pc` files
-have no consumer (consumers link these libraries by explicit path, not
-through pkg-config) and their `prefix=` line is an absolute build path;
-`share/` is ffmpeg's example `.c` files plus LAME's man page, which
-`--disable-doc` does not suppress and which would otherwise be published
-four times over.
-
-The licence texts travel with the binaries: shipping shared libraries is
-how the LGPL's relinking requirement is satisfied here, and the notice is
-the other half of that obligation.
-
-Pinned upstream revisions live at the top of `setup.sh`: FFmpeg `n8.1.2` and
-LAME `3.100`.
+The script settles that *before* it builds anything, by running a static hello
+world with no FFmpeg in it at all: if that cannot start, it says so and stops,
+because the alternative reads as a build failure and is not one. Deciding it on
+a binary rather than on the message matters — bionic reads the old personality
+value before setting the new one and has a separate fatal for each step, so a
+grep of the harness's own output would recognise one failure and let the other
+through as a bare `SIGABRT`.
 
 ## Building locally
 
@@ -524,6 +537,12 @@ assertions:
 - **Every SONAME on every ABI is unversioned.** This is the failure mode the
   whole module is arranged around, and it is invisible until a device fails
   to `dlopen`, so it is asserted 16 times rather than spot-checked once.
+- **Every `LOAD` segment on every ABI is aligned to `0x4000`.** `PAGE_LDFLAGS`
+  asks the linker for a 16 KB max-page-size, and asking is not evidence: a
+  4 KB-aligned library packages, links and passes every other check here, then
+  fails to map on an Android 15 device that boots with 16 KB pages — a device
+  test we do not run in CI. An empty segment list counts as a failure, so the
+  check cannot pass by finding nothing to look at.
 - **The codec set is really enabled**, asserted per ABI against the
   generated `config_components.h` immediately after each `configure` — all
   25 components plus `CONFIG_LIBMP3LAME` (which lives in `config.h`, not

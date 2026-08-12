@@ -114,10 +114,17 @@ jobs:
           key: ${{ steps.ffmpeg-cache.outputs.cache-primary-key }}
 
       # armeabi-v7a is the one shipped ABI nothing in this project can execute:
-      # the maintainer owns no 32-bit device, and Apple silicon cannot run
-      # AArch32 at all, so it was built over and over and never once RUN. These
-      # two steps run it, on the same runner that built it, in well under a
-      # second of emulated time.
+      # no 32-bit device is available, and Apple silicon cannot run AArch32 at
+      # all, so it was built over and over and never once RUN. These two steps
+      # run it, on the same runner that built it, in well under a second of
+      # emulated time.
+      #
+      # THIS GATES PUBLISHING, deliberately. It sits above the AAR build and the
+      # publish step, so a red smoke stops 0.1.<run_number> from reaching GitHub
+      # Packages — which is the point: the alternative is publishing an
+      # armeabi-v7a nobody ran. A `continue-on-error` here would rot within
+      # weeks. If it ever has to be bypassed in an incident, that is a commit
+      # removing this step, not a flag.
       #
       # WHAT THIS PROVES: the BUILD is sound for that ABI — the code executes,
       # the ARM assembly is intact, the link is complete, and the codec set is
@@ -125,15 +132,26 @@ jobs:
       # (avcodec_find_*_by_name at run time, not a grep for a long_name).
       #
       # WHAT IT DOES NOT PROVE: anything about Android's dynamic loader — page
-      # alignment, SONAMEs, DT_NEEDED resolution inside the app's lib dir — or
-      # the JNI wiring. The harness is linked statically because qemu-user has
-      # no bionic dynamic linker to give a shared-linked Android binary. Those
-      # properties are asserted for all four ABIs by build-ffmpeg.sh and the JNI
-      # is one source file compiled per ABI, so the gap is narrow; closing it
-      # means a physical arm32 device (Firebase Test Lab), which is a separate
-      # decision. See src/test/cpp/arm32_smoke.c.
+      # alignment, SONAMEs, DT_NEEDED resolution inside the app's lib dir — the
+      # JNI wiring, or any defect only a shared link can produce. The harness is
+      # linked statically because qemu-user has no bionic dynamic linker to give
+      # a shared-linked Android binary. The loader properties are asserted on
+      # the shipped .so files for all four ABIs by build-ffmpeg.sh (SONAME and
+      # 16 KB alignment) and the JNI is one source file compiled per ABI, so the
+      # gap is narrow; closing it means a physical arm32 device (Firebase Test
+      # Lab), which is a separate decision. See src/test/cpp/arm32_smoke.c.
+      #
+      # apt-get talks to a mirror, and this step is upstream of publishing, so a
+      # mirror hiccup would fail a release. Three attempts before giving up.
       - name: Install qemu-arm
-        run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+        run: |
+          for i in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y qemu-user-static && exit 0
+            echo "apt-get attempt $i failed; retrying in 15s" >&2
+            sleep 15
+          done
+          echo "ERROR: could not install qemu-user-static after 3 attempts" >&2
+          exit 1
 
       - name: arm32 smoke (armeabi-v7a under qemu-arm)
         working-directory: libs/decent-audio-ffmpeg

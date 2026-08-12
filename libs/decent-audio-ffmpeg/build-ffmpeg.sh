@@ -74,7 +74,9 @@ NEUTRAL_PREFIX="/decent-audio-ffmpeg"
 # Android 15+ devices may use 16 KB memory pages. NDK r28+ links with a
 # 16 KB max-page-size by default, but we state it explicitly because these
 # .so files are produced by upstream configure scripts, not by the NDK's
-# own build systems — nothing else here would guarantee it.
+# own build systems — nothing else here would guarantee it. Passing the flag
+# is not evidence that it took, so the verify block at the end reads the
+# alignment back off every finished library.
 PAGE_LDFLAGS="-Wl,-z,max-page-size=16384"
 
 # The components the download pipeline actually needs. Asserted against the
@@ -172,11 +174,11 @@ build_abi() {
 
   # armeabi-v7a is the only ABI that also produces STATIC archives, and the
   # reason is that it is the only shipped ABI nothing available to us can run:
-  # the maintainer owns no 32-bit device and Apple silicon cannot execute
-  # AArch32 at all, so it was built over and over and never once RUN. It is
-  # run under qemu-arm in CI instead (arm32-smoke.sh), and a STATIC link is
-  # what makes that possible — qemu-user has no bionic dynamic linker to give
-  # a shared-linked Android binary.
+  # no 32-bit device is available and Apple silicon cannot execute AArch32 at
+  # all, so it was built over and over and never once RUN. It is run under
+  # qemu-arm in CI instead (arm32-smoke.sh), and a STATIC link is what makes
+  # that possible — qemu-user has no bionic dynamic linker to give a
+  # shared-linked Android binary.
   #
   # The archives are not a second build: one `make` compiles each object once
   # (PIC, because --enable-shared demands it) and both forms are produced from
@@ -263,6 +265,14 @@ build_abi() {
   # debug info (and with it those paths) and keeps every symbol the link needs.
   if [ "$ABI" = armeabi-v7a ]; then
     mkdir -p "$SMOKE/$ABI"
+    # Asserted rather than left to the glob. If a future edit drops
+    # --enable-static there are no archives at all, and the bare `mv` would end
+    # the script under `set -e` with "mv: No such file or directory" — the
+    # readable version of that is eighty lines further down and would never run.
+    if ! ls "$PREFIX/lib"/*.a >/dev/null 2>&1; then
+      echo "ERROR: $ABI produced no static archives — is --enable-static still set for it?" >&2
+      exit 1
+    fi
     mv "$PREFIX/lib"/*.a "$SMOKE/$ABI/"
     # libmp3lame is a build-time input folded into libavcodec.so, which is why
     # it is absent from prebuilt/ by design (see README). A static link has to
@@ -335,6 +345,40 @@ done
 # Note the `if` rather than `&&`: under `set -e` a failing `&&` list at top
 # level aborts the script, which would skip the checks and the summary below.
 if [ "$FAIL" -eq 0 ]; then echo "SONAMEs OK (all unversioned, 4 ABIs x 4 libs)"; fi
+
+# 16 KB pages. PAGE_LDFLAGS asks the linker for a 16 KB max-page-size and until
+# now nothing checked that the request survived: a library whose LOAD segments
+# came out 4 KB aligned packages fine, passes every other check here, and then
+# simply fails to map on an Android 15 device that boots with 16 KB pages. The
+# device test is the only thing that would have caught it and it is not in CI,
+# so assert it on the artifact — on every ABI, for the same reason the SONAME is.
+ALIGNED=0
+for ABI in arm64-v8a armeabi-v7a x86_64 x86; do
+  for LIB in libavcodec libavformat libavutil libswresample; do
+    SO="$OUT/$ABI/lib/$LIB.so"
+    # A missing file was already reported by the loop above; don't say it twice.
+    [ -f "$SO" ] || continue
+    # -W keeps each program header on one line. The Align column is last and
+    # stays last whether the flags print as one token ("RW") or two ("R E").
+    ALIGNS="$(llvm-readelf -lW "$SO" | awk '$1=="LOAD"{print $NF}')"
+    if [ -z "$ALIGNS" ]; then
+      # An empty list is not a pass: no LOAD segment means readelf failed or
+      # this is not the ELF the loop thinks it is. Without this the check would
+      # go quiet exactly when it stopped working.
+      echo "NO LOAD SEGMENTS  $ABI/$LIB.so"; FAIL=1; continue
+    fi
+    for A in $ALIGNS; do
+      if [ "$A" != 0x4000 ]; then
+        echo "BAD ALIGN  $ABI/$LIB.so -> $A"; FAIL=1
+      else
+        ALIGNED=$((ALIGNED + 1))
+      fi
+    done
+  done
+done
+if [ "$FAIL" -eq 0 ]; then
+  echo "16 KB alignment OK ($ALIGNED LOAD segments, 4 ABIs x 4 libs)"
+fi
 
 # The archives arm32-smoke.sh links against. Asserted here, where the reason is
 # in view, rather than surfacing three job steps later as a linker error about

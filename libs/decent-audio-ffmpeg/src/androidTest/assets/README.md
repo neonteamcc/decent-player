@@ -20,6 +20,12 @@ ffmpeg -f lavfi -i "sine=f=440:r=48000:d=2" \
   -c:a eac3 -b:a 768k -f mp4 eac3_51.mp4
 ```
 
+Regenerating `flac_in_mp4.m4a` changes its decoded PCM, so `FLAC_FIXTURE_CRC`
+in `src/test/cpp/arm32_smoke.c` has to be updated to the new value in the same
+commit. The arm32 smoke pins that CRC and would otherwise fail the run saying
+"the decode is wrong, not just different" — which in exactly this one case it
+is not.
+
 A tone rather than `anullsrc` silence on purpose: silence encodes to constant
 subframes, which is the one case in which a broken decode path still produces a
 plausible-looking output. The `pan` filter gives each of the six channels a
