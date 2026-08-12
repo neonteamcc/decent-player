@@ -4,6 +4,10 @@ src/main/jni/upstream/
 # Build output of build-ffmpeg.sh (headers + shared libs per ABI)
 prebuilt/
 
+# armeabi-v7a's static archives, built alongside the shared libraries for the
+# emulated arm32 smoke test (arm32-smoke.sh). Never published, never packaged.
+prebuilt-static/
+
 # Staged copies of the above, in the layout the AAR packages (see
 # build.gradle.kts). Both are regenerated from prebuilt/ on every build.
 prebuilt-jnilibs/

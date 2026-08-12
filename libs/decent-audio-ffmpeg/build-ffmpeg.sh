@@ -7,11 +7,16 @@
 # Output: prebuilt/<abi>/lib/lib{avcodec,avformat,avutil,swresample}.so
 #         prebuilt/include/**    (headers, shared by all ABIs)
 #         prebuilt/COPYING.*     (the licence notices these libraries ship under)
+#         prebuilt-static/armeabi-v7a/*.a  (NOT published — see SMOKE below)
 set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC="$DIR/src/main/jni/upstream"
 OUT="$DIR/prebuilt"
+# armeabi-v7a's static archives, kept for the emulated smoke test
+# (arm32-smoke.sh). Deliberately NOT under prebuilt/: everything there is
+# either published or scanned as if it were, and these are neither.
+SMOKE="$DIR/prebuilt-static"
 
 # API 28 matches the app's minSdk. A library floor above it would ship a
 # download pipeline that some supported devices cannot load at all.
@@ -165,6 +170,22 @@ build_abi() {
     x86)    ASMFLAGS="--disable-x86asm --disable-inline-asm" ;;
   esac
 
+  # armeabi-v7a is the only ABI that also produces STATIC archives, and the
+  # reason is that it is the only shipped ABI nothing available to us can run:
+  # the maintainer owns no 32-bit device and Apple silicon cannot execute
+  # AArch32 at all, so it was built over and over and never once RUN. It is
+  # run under qemu-arm in CI instead (arm32-smoke.sh), and a STATIC link is
+  # what makes that possible — qemu-user has no bionic dynamic linker to give
+  # a shared-linked Android binary.
+  #
+  # The archives are not a second build: one `make` compiles each object once
+  # (PIC, because --enable-shared demands it) and both forms are produced from
+  # those same objects. The code that runs under emulation is the code that
+  # ships. Note the `if` rather than `&&` for the same reason as the SONAME
+  # loop below — a failing `&&` list aborts the script under `set -e`.
+  local STATICFLAG="--disable-static"
+  if [ "$ABI" = armeabi-v7a ]; then STATICFLAG="--enable-static"; fi
+
   echo
   echo "=== lame $ABI ==="
   # LAME is built STATIC on purpose: it is an implementation detail folded
@@ -209,7 +230,7 @@ build_abi() {
       --prefix="$NEUTRAL_PREFIX" \
       --target-os=android --arch="$CPU" --enable-cross-compile \
       --cc="$CC" --cross-prefix="llvm-" --nm="llvm-nm" \
-      --enable-shared --disable-static \
+      --enable-shared $STATICFLAG \
       --disable-everything --disable-programs --disable-doc --disable-avdevice \
       --disable-swscale --disable-avfilter --disable-network \
       --disable-iconv --disable-symver \
@@ -233,6 +254,24 @@ build_abi() {
   mv "$STAGE$NEUTRAL_PREFIX"/* "$PREFIX/"
   rm -rf "$STAGE"
 
+  # Move the static archives out of the published tree, before anything else
+  # looks at it. They are a CI input, not an artifact, and prebuilt/ is no
+  # place for one: the leak scan at the end of this script runs over the whole
+  # of prebuilt/, and ffmpeg's install rule strips shared libraries but not
+  # archives — so their DWARF would carry this checkout's absolute path and
+  # fail that scan for files nobody ever publishes. --strip-debug drops the
+  # debug info (and with it those paths) and keeps every symbol the link needs.
+  if [ "$ABI" = armeabi-v7a ]; then
+    mkdir -p "$SMOKE/$ABI"
+    mv "$PREFIX/lib"/*.a "$SMOKE/$ABI/"
+    # libmp3lame is a build-time input folded into libavcodec.so, which is why
+    # it is absent from prebuilt/ by design (see README). A static link has to
+    # name it explicitly, so the unpublished smoke tree gets its own copy —
+    # this does not put it anywhere a consumer could link it a second time.
+    cp "$DEPS_ABS/lib/libmp3lame.a" "$SMOKE/$ABI/"
+    llvm-strip --strip-debug "$SMOKE/$ABI"/*.a
+  fi
+
   # pkgconfig: the .pc files record `prefix=` as an absolute path, and there
   # is no consumer for them — Task 2's CMake links these libraries by
   # explicit path, not through pkg-config. Dropping them removes a whole
@@ -243,7 +282,7 @@ build_abi() {
   rm -rf "$PREFIX/share"
 }
 
-rm -rf "$OUT"
+rm -rf "$OUT" "$SMOKE"
 build_abi arm64-v8a   aarch64-linux-android    aarch64
 build_abi armeabi-v7a armv7a-linux-androideabi arm
 build_abi x86_64      x86_64-linux-android     x86_64
@@ -296,6 +335,17 @@ done
 # Note the `if` rather than `&&`: under `set -e` a failing `&&` list at top
 # level aborts the script, which would skip the checks and the summary below.
 if [ "$FAIL" -eq 0 ]; then echo "SONAMEs OK (all unversioned, 4 ABIs x 4 libs)"; fi
+
+# The archives arm32-smoke.sh links against. Asserted here, where the reason is
+# in view, rather than surfacing three job steps later as a linker error about
+# a missing -lavcodec.
+for LIB in libavcodec libavformat libavutil libswresample libmp3lame; do
+  [ -f "$SMOKE/armeabi-v7a/$LIB.a" ] || {
+    echo "MISSING  prebuilt-static/armeabi-v7a/$LIB.a"; FAIL=1; }
+done
+if [ "$FAIL" -eq 0 ]; then
+  echo "arm32 smoke archives OK ($(du -ch "$SMOKE/armeabi-v7a"/*.a | tail -1 | cut -f1))"
+fi
 
 # The codec set was already asserted per ABI on config_components.h, right
 # after each configure. What is left to prove on the artifact is that

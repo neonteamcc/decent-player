@@ -71,11 +71,16 @@ jobs:
       # The key hashes both scripts (a corrected build script must never be
       # served artifacts produced by the old one; setup.sh pins the upstream
       # revisions) and the NDK revision that compiled them.
+      # prebuilt-static/ rides in the same cache entry as prebuilt/ and under
+      # the same key: it is written by the same script run, gated by the same
+      # completion marker, and useless without the tree it was built beside.
       - name: Restore FFmpeg build from cache
         id: ffmpeg-cache
         uses: actions/cache/restore@v4
         with:
-          path: libs/decent-audio-ffmpeg/prebuilt
+          path: |
+            libs/decent-audio-ffmpeg/prebuilt
+            libs/decent-audio-ffmpeg/prebuilt-static
           key: ffmpeg-${{ runner.os }}-ndk${{ env.NDK_VERSION }}-${{ hashFiles('libs/decent-audio-ffmpeg/build-ffmpeg.sh', 'libs/decent-audio-ffmpeg/setup.sh') }}
 
       # The skip is gated on prebuilt/.complete, which build-ffmpeg.sh writes
@@ -103,8 +108,38 @@ jobs:
         if: success() && steps.ffmpeg-cache.outputs.cache-hit != 'true' && hashFiles('libs/decent-audio-ffmpeg/prebuilt/.complete') != ''
         uses: actions/cache/save@v4
         with:
-          path: libs/decent-audio-ffmpeg/prebuilt
+          path: |
+            libs/decent-audio-ffmpeg/prebuilt
+            libs/decent-audio-ffmpeg/prebuilt-static
           key: ${{ steps.ffmpeg-cache.outputs.cache-primary-key }}
+
+      # armeabi-v7a is the one shipped ABI nothing in this project can execute:
+      # the maintainer owns no 32-bit device, and Apple silicon cannot run
+      # AArch32 at all, so it was built over and over and never once RUN. These
+      # two steps run it, on the same runner that built it, in well under a
+      # second of emulated time.
+      #
+      # WHAT THIS PROVES: the BUILD is sound for that ABI — the code executes,
+      # the ARM assembly is intact, the link is complete, and the codec set is
+      # what configure promised, asserted the one way that cannot be faked
+      # (avcodec_find_*_by_name at run time, not a grep for a long_name).
+      #
+      # WHAT IT DOES NOT PROVE: anything about Android's dynamic loader — page
+      # alignment, SONAMEs, DT_NEEDED resolution inside the app's lib dir — or
+      # the JNI wiring. The harness is linked statically because qemu-user has
+      # no bionic dynamic linker to give a shared-linked Android binary. Those
+      # properties are asserted for all four ABIs by build-ffmpeg.sh and the JNI
+      # is one source file compiled per ABI, so the gap is narrow; closing it
+      # means a physical arm32 device (Firebase Test Lab), which is a separate
+      # decision. See src/test/cpp/arm32_smoke.c.
+      - name: Install qemu-arm
+        run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+
+      - name: arm32 smoke (armeabi-v7a under qemu-arm)
+        working-directory: libs/decent-audio-ffmpeg
+        env:
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
+        run: bash arm32-smoke.sh
 
       - name: Build release AARs
         working-directory: libs

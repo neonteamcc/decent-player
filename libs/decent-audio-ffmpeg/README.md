@@ -19,18 +19,21 @@ fetched sources and the build output are gitignored:
 ```
 setup.sh          fetch FFmpeg + LAME sources into src/main/jni/upstream/
 build-ffmpeg.sh   cross-compile both for arm64-v8a, armeabi-v7a, x86_64, x86
+arm32-smoke.sh    run armeabi-v7a under qemu-arm (see "The arm32 smoke test")
 build.gradle.kts  the AAR: compiles the wrapper, packages the prebuilt libs
 consumer-rules.pro  R8 keeps that travel inside the AAR (see "R8 / ProGuard")
 src/main/jni/     CMakeLists.txt + flowy_audio_jni.cc  (the wrapper)
 src/main/java/    com.decent.audio.FlowyFfmpeg          (the public surface)
 src/androidTest/  the on-device proof (see "Device proof")
   assets/         two committed synthetic fixtures this build cannot synthesise
+src/test/cpp/     arm32_smoke.c — the emulated proof, CI only
 prebuilt/         build output of build-ffmpeg.sh (gitignored)
   .complete       written last; CI's "the build really finished" marker
   <abi>/lib/lib{avcodec,avformat,avutil,swresample}.so
   <abi>/include/  per-ABI headers as installed
   include/        the same headers published once, for consumers' CMake
   COPYING.ffmpeg.LGPLv2.1, COPYING.lame.LGPLv2
+prebuilt-static/  armeabi-v7a/*.a for the smoke test only (gitignored)
 prebuilt-jnilibs/ prebuilt/<abi>/lib/*.so restaged as <abi>/*.so (gitignored)
 prebuilt-assets/  the COPYING files restaged as assets/ (gitignored)
 ```
@@ -315,6 +318,72 @@ It is not in CI: the FFmpeg build already dominates the job, and the x86_64
 emulator a GitHub runner can host is not the ABI the fleet uses. Run it against
 an arm64 emulator or a real device when the wrapper or the codec set changes.
 
+## The arm32 smoke test
+
+`arm64-v8a` is proven — an emulator run with 16 KB pages, then two real phones
+in the field. **`armeabi-v7a` was built four times over and never once run.**
+The maintainer owns no 32-bit device, and Apple silicon cannot execute AArch32
+at all, so a local emulator would be full-system emulation rather than a
+practical route. CI runs it instead, on every push, in under a second:
+
+```bash
+ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/29.0.14206865 bash arm32-smoke.sh
+```
+
+`src/test/cpp/arm32_smoke.c` is linked against the armeabi-v7a libraries
+`build-ffmpeg.sh` just produced and run under `qemu-arm`. It decodes both
+committed fixtures, encodes what it decoded back out through the FLAC encoder
+and libmp3lame, and looks the whole codec set up by name at run time.
+
+Three of its checks carry most of the weight.
+
+The **decoded PCM is pinned by CRC**. FLAC decoding is exact integer
+arithmetic, so the value is a property of the fixture rather than of our build
+— the same `b934fd38` comes out of this build under emulation and out of a host
+FFmpeg on a different architecture.
+
+The **FLAC round trip is bit-exact**: what the FLAC encoder wrote has to decode
+back to the same CRC. Note that this does *not* subsume the pinned value, and
+that was established rather than assumed — flipping one byte of the fixture
+changes the decoded CRC while leaving the round trip perfectly green, because
+encoding wrong samples and decoding them back returns the same wrong samples. A
+round trip proves the encoder and decoder agree with each other; only a pinned
+value proves they agree with the format.
+
+The **negative controls** (`h264`, `alac`, `opus`, `vorbis`) must come back
+NULL, which is what proves `--disable-everything` held on this ABI too; it is
+the same list `build-ffmpeg.sh` asserts against `config_components.h`, checked
+here against what the library actually offers.
+
+**What it proves:** the build is sound for that ABI — the code executes, the
+ARM assembly is intact, the link is complete, the codecs are there. That is
+where this actually breaks.
+
+**What it does not prove:** anything about Android's dynamic loader — page
+alignment, SONAMEs, `DT_NEEDED` resolution inside the app's lib dir — or the
+JNI wiring. The harness is linked *statically*, which is not a shortcut but the
+only option: qemu-user has no bionic dynamic linker to hand a shared-linked
+Android binary. Those properties are asserted for all four ABIs by
+`build-ffmpeg.sh`, and the JNI is one source file compiled per ABI, so the gap
+is narrow. Closing it means running `src/androidTest/` on a physical arm32
+device (Firebase Test Lab) — a separate decision.
+
+The archives it links are not a second build: one `make` compiles each object
+once (PIC, because `--enable-shared` demands it) and both forms come from those
+same objects, which is why `--enable-static` is set for this ABI and no other.
+They live in `prebuilt-static/` rather than `prebuilt/` because everything
+under `prebuilt/` is either published or scanned as if it were, and an archive
+is neither — ffmpeg's install rule strips shared libraries but not archives, so
+their DWARF would carry the checkout's absolute path straight into the leak
+scan. They are stripped of debug info on the way out for the same reason.
+
+One host-dependent thing to know if you run it outside CI: a 32-bit Android
+binary sets `personality(PER_LINUX32)` before `main()`, and an **arm64 kernel
+refuses that** unless the CPU has 32-bit EL0 — Apple silicon has none. So it
+aborts on an arm64 workstation before a single line of FFmpeg runs, and the
+script says so rather than letting it read as a build failure. x86_64 kernels
+accept it, which is what `setarch --32bit` has always relied on.
+
 Four shared libraries per ABI, and nothing else to package. LAME is staged
 into the ffmpeg source tree (`upstream/ffmpeg/deps/<abi>/`) rather than into
 the published prefix, so `libmp3lame.a` and `lame/*.h` never appear in
@@ -394,6 +463,11 @@ LAME itself is built *static* and folded into `libavcodec.so`. That is not a
 contradiction: libavcodec is what remains replaceable, and it is the unit the
 license cares about.
 
+`armeabi-v7a` also produces `.a` archives, and that is not a contradiction
+either: nothing links them into anything shipped. They exist so the emulated
+smoke test can produce a binary qemu-user can start, they land outside
+`prebuilt/`, and no packaging step can see them. See "The arm32 smoke test".
+
 **Unversioned SONAMEs.** Android's packager only extracts files matching
 `lib*.so`, so a default `libavcodec.so.62` never reaches a device — it is
 silently absent at `dlopen` time. FFmpeg's own `--target-os=android` case
@@ -460,6 +534,9 @@ assertions:
   LAME sources, so it is real evidence.
 - **No host path is present in any published file** — see "Host-neutral
   builds" below.
+- **The archives the arm32 smoke links exist**, asserted where the reason for
+  them is in view rather than surfacing three CI steps later as a linker error
+  about a missing `-lavcodec`.
 
 ### Two checks that look right and prove nothing
 
