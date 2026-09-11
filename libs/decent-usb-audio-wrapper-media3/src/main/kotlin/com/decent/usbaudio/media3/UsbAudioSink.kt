@@ -457,12 +457,21 @@ class UsbAudioSink(
         super.pause()
     }
 
+    /**
+     * Bit-perfect path (USB stream alive): the delegate AudioTrack is muted and
+     * the requested volume is only remembered, to be restored on unmute.
+     * Otherwise the value goes straight to the delegate: an unmuted delegate
+     * used to be left at whatever it had, so `ExoPlayer.setVolume` was a no-op
+     * on the ordinary route and clients had to bake gain into the PCM instead.
+     */
     override fun setVolume(volume: Float) {
         pendingVolume = volume
         if (config.bitPerfectEnabled && usbAudioStream?.isAlive == true) {
             muteDelegateIfNeeded()
-        } else {
+        } else if (delegateMuted) {
             unmuteDelegateIfNeeded()
+        } else {
+            super.setVolume(volume)
         }
     }
 
