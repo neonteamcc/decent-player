@@ -52,7 +52,7 @@ jobs:
 
       - name: Unit tests (descriptor parser, control encodings)
         working-directory: libs
-        run: ./gradlew --no-daemon :decent-usb-audio-driver:testDebugUnitTest
+        run: ./gradlew --no-daemon :decent-usb-audio-driver:testDebugUnitTest :decent-usb-audio-wrapper-media3:testDebugUnitTest
 
       - name: Unit tests (USB packet timing)
         run: |

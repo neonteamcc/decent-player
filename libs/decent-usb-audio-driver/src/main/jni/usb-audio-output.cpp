@@ -753,6 +753,48 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeFlush(
     LOGI("Flush: frameAccumulator, residual, framesWritten (and rate converter) reset");
 }
 
+// End-of-stream is a playback barrier, not a seek or a teardown. Preserve the
+// stream and its feedback loop, and never DISCARD an audio URB here.
+JNIEXPORT jboolean JNICALL
+Java_com_decent_usbaudio_UsbAudioStream_nativeFinish(JNIEnv *, jobject, jlong h) {
+    auto *ctx = reinterpret_cast<UsbAudioContext *>(h);
+    if (!ctx || !ctx->running.load()) return JNI_FALSE;
+    int offset = 0;
+    const int tailBytes = ctx->residualBytes;
+    while (offset < tailBytes) {
+        if (ctx->urbsInFlight >= ctx->numUrbs && reapOldestUrb(ctx, 500) < 0)
+            return JNI_FALSE;
+        auto *slot = &ctx->ring[ctx->submitIdx];
+        int sizes[USB_AUDIO_PACKETS_PER_URB];
+        int packets = 0, bytes = 0;
+        while (packets < ctx->packetsPerUrb && offset + bytes < tailBytes) {
+            ctx->frameAccumulator += ctx->calibratedFpmf * ctx->serviceInterval;
+            int frames = (int)ctx->frameAccumulator;
+            ctx->frameAccumulator -= frames;
+            const int maximum = ctx->maxPacketSize > 0 ? ctx->maxPacketSize / ctx->bytesPerFrame : INT32_MAX;
+            if (frames > maximum) {
+                ctx->frameAccumulator += frames - maximum;
+                frames = maximum;
+            }
+            sizes[packets++] = frames * ctx->bytesPerFrame;
+            bytes += frames * ctx->bytesPerFrame;
+        }
+        if (bytes == 0) continue;
+        memset(slot->buffer, 0, bytes);
+        const int copied = (tailBytes - offset < bytes) ? tailBytes - offset : bytes;
+        memcpy(slot->buffer, ctx->residualBuffer + offset, copied);
+        if (submitRingUrb(ctx, sizes, packets, bytes) < 0) return JNI_FALSE;
+        offset += copied;
+    }
+    ctx->residualBytes = 0;
+    const int pending = ctx->urbsInFlight;
+    while (ctx->urbsInFlight > 0) {
+        if (!ctx->running.load() || reapOldestUrb(ctx, 500) < 0) return JNI_FALSE;
+    }
+    LOGI("Finish: played tail=%d bytes and drained %d audio URBs", tailBytes, pending);
+    return JNI_TRUE;
+}
+
 JNIEXPORT jint JNICALL
 Java_com_decent_usbaudio_UsbAudioStream_nativeDrainUrbs(
         JNIEnv *, jobject, jlong h) {
@@ -769,7 +811,7 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioDestroy(
     if (!ctx) return;
     ctx->running.store(false);
 
-    if (ctx->urbsInFlight > 0) {
+    if (ctx->urbsInFlight > 0 || ctx->feedbackInFlight) {
         drainAllUrbs(ctx);
     }
 

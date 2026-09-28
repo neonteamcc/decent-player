@@ -165,6 +165,9 @@ class UsbAudioSink(
     private var hasDeferredConfig: Boolean = false
 
 
+    private var pendingConfiguration: AudioSink.AudioSinkConfig? = null
+    private var configuredFormat: Format = Format.Builder().build()
+
     /**
      * media3 1.11.0 made [ForwardingAudioSink.configure] (Format, Int, IntArray?)
      * final and routed it through this config-object overload — the old
@@ -174,6 +177,21 @@ class UsbAudioSink(
      * mapping travel inside the config and are forwarded untouched.
      */
     override fun configure(audioSinkConfig: AudioSink.AudioSinkConfig) {
+        val format = audioSinkConfig.format
+        if (config.bitPerfectEnabled && usbAudioStream != null && nativeEngine == null &&
+            (format.sampleRate != currentSampleRate || format.channelCount != currentChannelCount)) {
+            pendingConfiguration = audioSinkConfig
+            usbStreamingThread?.finish()
+            Log.i(TAG, "USB configuration deferred until queued audio ends: " +
+                    "$currentSampleRate -> ${format.sampleRate} Hz")
+            return
+        }
+        pendingConfiguration = null
+        applyConfiguration(audioSinkConfig)
+    }
+
+    private fun applyConfiguration(audioSinkConfig: AudioSink.AudioSinkConfig) {
+        configuredFormat = audioSinkConfig.format
         val inputFormat = audioSinkConfig.format
         val enc = inputFormat.pcmEncoding
         if (enc != Format.NO_VALUE) currentEncoding = enc
@@ -225,9 +243,13 @@ class UsbAudioSink(
         if (config.bitPerfectEnabled && sr != null && ch != null) {
             val device = usbAudioDevice.findUsbAudioDevice()
             if (device != null && usbAudioDevice.hasPermission(device)) {
+                val reused = sr == currentSampleRate && ch == currentChannelCount &&
+                        usbAudioStream?.isAlive == true
                 configureUsbBitPerfect(sr, ch, enc)
-                windowOffsetUs = -1L
-                usbStartMediaTimeNeedsInit = true
+                if (!reused) {
+                    windowOffsetUs = -1L
+                    usbStartMediaTimeNeedsInit = true
+                }
                 if (config.forceRouteToSpeaker) forceMediaToSpeaker()
                 super.configure(audioSinkConfig)
                 muteDelegateIfNeeded()
@@ -250,6 +272,13 @@ class UsbAudioSink(
         presentationTimeUs: Long,
         encodedAccessUnitCount: Int
     ): Boolean {
+        checkUsbFailure()
+        pendingConfiguration?.let { pending ->
+            usbStreamingThread?.finish()
+            if (usbStreamingThread?.isEnded() == false) return false
+            pendingConfiguration = null
+            applyConfiguration(pending)
+        }
         val stream = usbAudioStream
         if (config.bitPerfectEnabled && stream?.isAlive == true) {
             muteDelegateIfNeeded()
@@ -336,7 +365,7 @@ class UsbAudioSink(
                     if (handleBufferCallCount <= 3) {
                         Log.i(TAG, "handleBuffer #$handleBufferCallCount: FLOAT samples=$totalSamples")
                     }
-                    thread.enqueue(floatBuf)
+                    if (!thread.enqueue(floatBuf)) return false
                 }
             } else {
                 val remaining = snapshot.remaining()
@@ -347,10 +376,11 @@ class UsbAudioSink(
                         val bps = PcmUtils.bytesPerSample(currentEncoding)
                         Log.i(TAG, "handleBuffer #$handleBufferCallCount: RAW ${bps*8}bit bytes=$remaining")
                     }
-                    thread.enqueueRaw(rawBytes, currentEncoding)
+                    if (!thread.enqueueRaw(rawBytes, currentEncoding)) return false
                 }
             }
 
+            handledEndOfStream = false
             // Advance buffer and return true — no delegate dependency.
             buffer.position(buffer.limit())
             return true
@@ -422,6 +452,10 @@ class UsbAudioSink(
             // Cannot delegate to super because LoadControl blocked ExoPlayer's loading,
             // so the delegate never reached end-of-stream on its own.
             if (engine != null && !engine.isRunning) return true
+            if (usbAudioStream != null) {
+                return pendingConfiguration == null && handledEndOfStream &&
+                        (usbStreamingThread?.isEnded() != false)
+            }
         }
         return super.isEnded()
     }
@@ -430,13 +464,17 @@ class UsbAudioSink(
         if (config.bitPerfectEnabled) {
             // Engine running → has pending data
             if (nativeEngine?.isRunning == true) return true
-            if (usbStreamingThread?.hasPendingData() == true) return true
+            if (usbAudioStream != null) return usbStreamingThread?.hasPendingData() == true
         }
         return super.hasPendingData()
     }
 
     override fun playToEndOfStream() {
+        checkUsbFailure()
         handledEndOfStream = true
+        if (config.bitPerfectEnabled && nativeEngine == null && usbAudioStream != null) {
+            usbStreamingThread?.finish()
+        }
         // Always propagate to delegate — ExoPlayer needs this signal to
         // detect end-of-stream and transition to the next track.
         super.playToEndOfStream()
@@ -479,8 +517,12 @@ class UsbAudioSink(
         super.flush()
         // Native engine handles its own flush/seek internally
         // ExoPlayer pipeline: flush queue + native stream
-        usbStreamingThread?.flush()
-        usbAudioStream?.flush()
+        val writer = usbStreamingThread
+        if (writer != null) writer.flush() else usbAudioStream?.flush()
+        pendingConfiguration?.let { pending ->
+            pendingConfiguration = null
+            applyConfiguration(pending)
+        }
         usbStartMediaTimeNeedsInit = true
         handledEndOfStream = false
         // Temporarily unblock LoadControl so ExoPlayer loads at least one chunk
@@ -489,6 +531,12 @@ class UsbAudioSink(
         // never knows where to seek to.
         if (nativeEngine?.isRunning == true) {
             isNativeEngineActive = false
+        }
+    }
+
+    private fun checkUsbFailure() {
+        usbStreamingThread?.failure?.let { cause ->
+            throw AudioSink.WriteException(-1, configuredFormat, false).also { it.initCause(cause) }
         }
     }
 

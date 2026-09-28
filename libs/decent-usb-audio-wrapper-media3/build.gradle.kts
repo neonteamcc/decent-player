@@ -16,9 +16,11 @@ android {
     }
 
     kotlin { jvmToolchain(21) }
+    testOptions { unitTests.isReturnDefaultValues = true }
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     api(project(":decent-usb-audio-driver"))
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.media3:media3-exoplayer:1.11.0")

@@ -165,6 +165,10 @@ class UsbAudioStream(
         nativeUsbAudioWriteRaw(nativeHandle, pcmBuffer, inputBitDepth)
     }
 
+    /** Play the final partial packet and wait for PCM URBs without stopping the stream.
+     * Called only by the USB writing thread, after its queued PCM. */
+    fun finish(): Boolean = nativeHandle == 0L || nativeFinish(nativeHandle)
+
     /**
      * Software volume, linear amplitude 0..1. Exactly 1.0 bypasses the
      * gain stage entirely (bit-perfect). Only for devices WITHOUT a
@@ -235,6 +239,7 @@ class UsbAudioStream(
     private external fun nativeUsbAudioWriteRaw(handle: Long, pcmBuffer: ByteArray, inputBitDepth: Int)
     private external fun nativeSetGain(handle: Long, gain: Float)
     private external fun nativeUsbAudioStop(handle: Long)
+    private external fun nativeFinish(handle: Long): Boolean
     private external fun nativeFlush(handle: Long)
     private external fun nativeDrainUrbs(handle: Long): Int
     private external fun nativeUsbAudioDestroy(handle: Long)

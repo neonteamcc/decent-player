@@ -86,6 +86,16 @@ static void checkStream(int rate, int busFrames, int interval, int bits,
                       pcm.begin() + sent.size()));
     printf("rate=%d bus=%d interval=%d packets/s=%d frames/s=%d feedback=%u OK\n",
            rate, busFrames, interval, packetsInSecond, framesInSecond, feedback);
+    // Finish must submit the residual tail and reap every audio URB. Padding
+    // is allowed only after the final real PCM byte, in the last USB packet.
+    assert(Java_com_decent_usbaudio_UsbAudioStream_nativeFinish(nullptr, nullptr, handle));
+    assert(ctx->residualBytes == 0);
+    assert(ctx->urbsInFlight == 0);
+    assert(ctx->running.load());
+    assert(pending.empty());
+    assert(sent.size() >= pcm.size());
+    assert(std::equal(pcm.begin(), pcm.end(), sent.begin()));
+    assert(std::all_of(sent.begin() + pcm.size(), sent.end(), [](uint8_t b) { return b == 0; }));
     Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioDestroy(nullptr, nullptr, handle);
     assert(pending.empty());
     packetBytes.clear();
@@ -108,5 +118,7 @@ int main() {
     // Derived intervals: packet duration, not bus speed alone, sets pacing.
     checkStream(48000, 8000, 4, 16, 196, 1);
     checkStream(48000, 1000, 2, 16, 388, 1);
-    puts("USB packet timing: 14 cases passed");
+    checkStream(44100, 8000, 1, 32, 200, 8); // KA17 captured 192k-limited configuration
+    checkStream(96000, 8000, 1, 32, 200, 8);
+    puts("USB packet timing and final drain: 16 cases passed");
 }
