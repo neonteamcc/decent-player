@@ -128,7 +128,7 @@ static void freeRing(UsbAudioContext *ctx) {
 // ── USB helpers ─────────────────────────────────────────────────────
 
 /**
- * Decode a feedback payload into frames-per-service-interval.
+ * Decode a feedback payload into audio frames per USB bus frame/microframe.
  *
  * Formats (USB 2.0 §5.12.4.2): 3 bytes = Q10.14 samples/frame (full
  * speed); 4 bytes = Q16.16 — samples/microframe at high speed, and
@@ -140,7 +140,7 @@ static void freeRing(UsbAudioContext *ctx) {
  * "freqshift" strategy as Linux snd-usb-audio — and later packets must
  * stay within [-12.5 %, +50 %] or the detection re-arms.
  *
- * @return frames per service interval, or 0 when the packet is unusable.
+ * @return audio frames per bus frame/microframe, or 0 for an unusable packet.
  */
 static double decodeFeedback(UsbAudioContext *ctx, const uint8_t *fb, int len) {
     if (len < 3) return 0;
@@ -259,7 +259,7 @@ static void handleFeedbackCompletion(UsbAudioContext *ctx) {
         ctx->calibratedFpmf = newFpmf;
         // Log only every 10000th feedback — logging in the audio path is expensive
         if (g_feedbackCount % 10000 == 0) {
-            LOGI("Feedback #%lld: fpsi=%.4f (%.1f Hz)",
+            LOGI("Feedback #%lld: frames/bus-frame=%.4f (%.1f Hz)",
                  (long long)g_feedbackCount, newFpmf,
                  newFpmf * ctx->packetsPerSecond);
         }
@@ -450,10 +450,14 @@ JNIEXPORT jlong JNICALL
 Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioCreate(
         JNIEnv *, jobject, jint fd, jint ifId, jint epOut, jint epFb,
         jint rate, jint ch, jint bits, jint maxPkt, jint packetsPerSecond,
-        jint feedbackMaxPacket, jint inputSampleRate) {
-    LOGI("Create: fd=%d ep=0x%02x rate=%d ch=%d bits=%d maxPkt=%d pps=%d fbMaxPkt=%d inRate=%d",
+        jint feedbackMaxPacket, jint inputSampleRate, jint dataInterval) {
+    LOGI("Create: fd=%d ep=0x%02x rate=%d ch=%d bits=%d maxPkt=%d busFps=%d fbMaxPkt=%d inRate=%d bInterval=%d",
          fd, epOut, rate, ch, bits, maxPkt, packetsPerSecond, feedbackMaxPacket,
-         inputSampleRate);
+         inputSampleRate, dataInterval);
+    if (dataInterval < 1 || dataInterval > 16) {
+        LOGE("Create: invalid data endpoint bInterval=%d", dataInterval);
+        return 0;
+    }
     auto *ctx = new(std::nothrow) UsbAudioContext();
     if (!ctx) return 0;
     ctx->fd = fd;
@@ -482,6 +486,13 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioCreate(
         ctx->packetsPerUrb = USB_AUDIO_PACKETS_PER_URB;
         ctx->numUrbs = USB_AUDIO_NUM_URBS;
     }
+    // USBFS schedules packets at the endpoint's bInterval. Feedback is
+    // normalized per bus frame; only packet sizing multiplies by this
+    // interval. Cayin N3 uses bInterval=2 (250 us), so each packet must
+    // contain twice the audio of an interval-1 high-speed endpoint.
+    ctx->serviceInterval = 1 << (dataInterval - 1);
+    ctx->packetsPerUrb /= ctx->serviceInterval;
+    if (ctx->packetsPerUrb < 1) ctx->packetsPerUrb = 1;
     if (ctx->maxPacketSize > 0) {
         while (ctx->packetsPerUrb > 1 &&
                ctx->packetsPerUrb * ctx->maxPacketSize > USB_AUDIO_URB_BUFFER_SIZE) {
@@ -620,11 +631,11 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioStart(
         double fb = readFeedback(ctx);
         if (fb > 0) {
             ctx->calibratedFpmf = fb;
-            LOGI("Start: initial feedback=%.4f fpsi (%.1f Hz), nominal=%.4f (%.1f Hz)",
+            LOGI("Start: initial feedback=%.4f frames/bus-frame (%.1f Hz), nominal=%.4f (%.1f Hz)",
                  fb, fb * ctx->packetsPerSecond,
                  nominalFpmf, nominalFpmf * ctx->packetsPerSecond);
         } else {
-            LOGW("Start: feedback not responding yet, using nominal %.4f fpsi", nominalFpmf);
+            LOGW("Start: feedback not responding yet, using nominal %.4f frames/bus-frame", nominalFpmf);
         }
 
         // Start continuous feedback: submit a feedback URB that will be
@@ -632,10 +643,10 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioStart(
         submitFeedbackUrb(ctx);
     }
 
-    LOGI("Start: rate=%d ch=%d bits=%d pps=%d ring=%d slots×%dpkt fpsi=%.4f feedback=%s",
+    LOGI("Start: rate=%d ch=%d bits=%d pps=%g ring=%d slots×%dpkt fpsi=%.4f feedback=%s",
          ctx->sampleRate, ctx->channelCount, ctx->bitDepth,
-         ctx->packetsPerSecond, ctx->numUrbs, ctx->packetsPerUrb,
-         ctx->calibratedFpmf,
+         ctx->packetsPerSecond / (double)ctx->serviceInterval, ctx->numUrbs, ctx->packetsPerUrb,
+         ctx->calibratedFpmf * ctx->serviceInterval,
          ctx->feedbackInFlight ? "continuous" : "none");
     return JNI_TRUE;
 }
@@ -1057,7 +1068,7 @@ void submitPcmToUrbs(UsbAudioContext *ctx, const uint8_t *pcmData, int totalByte
     int offset = 0;
     // Use calibrated fpmf from DAC's async feedback endpoint (read at start).
     // This matches the DAC's actual hardware clock instead of the nominal rate.
-    double fpmf = ctx->calibratedFpmf;
+    double framesPerPacket = ctx->calibratedFpmf * ctx->serviceInterval;
     // Hard bandwidth ceiling: a packet may never exceed the endpoint's
     // wMaxPacketSize — the kernel rejects such URBs with EMSGSIZE. The
     // fractional remainder stays in the accumulator for later packets.
@@ -1073,7 +1084,7 @@ void submitPcmToUrbs(UsbAudioContext *ctx, const uint8_t *pcmData, int totalByte
             int remaining = dataLen - offset - urbBytes;
             if (remaining <= 0) break;
 
-            ctx->frameAccumulator += fpmf;
+            ctx->frameAccumulator += framesPerPacket;
             int frames = (int)ctx->frameAccumulator;
             ctx->frameAccumulator -= frames;
             if (frames > maxFrames) {

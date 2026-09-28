@@ -557,7 +557,8 @@ class UsbAudioSink(
             maxPacketSize = deviceInfo.maxPacketSize,
             packetsPerSecond = deviceInfo.busSpeed.packetsPerSecond,
             feedbackMaxPacket = feedbackMaxPacket(deviceInfo, altSetting),
-            inputSampleRate = conversionInput
+            inputSampleRate = conversionInput,
+            dataInterval = deviceInfo.dataInterval
         )
 
         if (!stream.isReady) {
@@ -602,7 +603,8 @@ class UsbAudioSink(
                 maxPacketSize = deviceInfo.maxPacketSize,
                 packetsPerSecond = deviceInfo.busSpeed.packetsPerSecond,
                 feedbackMaxPacket = feedbackMaxPacket(deviceInfo, altSetting),
-                inputSampleRate = conversionInput
+                inputSampleRate = conversionInput,
+                dataInterval = deviceInfo.dataInterval
             )
             if (!stream.isReady) {
                 Log.e(TAG, "USB stream recreation failed after reopen")

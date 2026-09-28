@@ -87,11 +87,13 @@ struct UsbAudioContext {
 
     // ── Bus-speed-dependent stream geometry (set at create) ─────
     /**
-     * Isochronous service intervals per second: 8000 at high speed
-     * (125 µs microframes), 1000 at full speed (1 ms frames). Divides the
-     * sample rate into the per-packet frame count.
+     * Bus frames per second: 8000 at high speed (125 µs microframes),
+     * 1000 at full speed (1 ms frames). Feedback stays in these units.
      */
     int32_t packetsPerSecond;
+
+    /** Bus frames per data packet: 2^(bInterval-1). */
+    int32_t serviceInterval;
 
     /** Packets per URB actually used (≤ USB_AUDIO_PACKETS_PER_URB). */
     int32_t packetsPerUrb;
@@ -178,7 +180,7 @@ struct UsbAudioContext {
     double frameAccumulator;
 
     /**
-     * Frames per isochronous service interval (microframe at high speed,
+     * Audio frames per USB bus frame (microframe at high speed,
      * 1 ms frame at full speed), calibrated from the DAC's async feedback
      * endpoint when one exists. More accurate than the nominal
      * sampleRate/packetsPerSecond calculation because it reflects the

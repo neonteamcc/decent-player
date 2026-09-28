@@ -52,6 +52,17 @@ jobs:
         working-directory: libs
         run: ./gradlew --no-daemon :decent-usb-audio-driver:testDebugUnitTest
 
+      - name: Unit tests (USB packet timing)
+        run: |
+          g++ -std=c++11 -Wall -Werror \
+            -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
+            -Ilibs/decent-usb-audio-driver/src/test/cpp/stubs \
+            libs/decent-usb-audio-driver/src/test/cpp/usb_packet_timing_test.cpp \
+            libs/decent-usb-audio-driver/src/main/jni/decimator.cpp \
+            libs/decent-usb-audio-driver/src/main/jni/resampler.cpp \
+            -o /tmp/usb_packet_timing_test
+          /tmp/usb_packet_timing_test
+
       - name: Unit tests (FLAC seek table sanitizer)
         run: |
           g++ -std=c++11 -Wall -Werror \

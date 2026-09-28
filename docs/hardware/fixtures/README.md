@@ -16,6 +16,11 @@ is reconstructed; each file states its source.
 | `fiio-ka17-2972-0093-lsusb.txt` + `-rawdescriptors.txt` | **FiiO KA17** (cyme/lsusb text + REAL raw bytes via pyusb on macOS) | 2972:0093 | High-speed UAC2 reference: clock source 0x29 behind selector 0x28, FU#10 **master Mute+Volume**, alts 32-bit PCM / 16-bit PCM / **DSD** (bmFormats 0x80000000), 4-byte async feedback with usage bits. The parser test runs on these exact bytes |
 | `kmhifi384-3302-3366-thesycon.txt` | KM-HIFI-384KHZ dongle (TTGK) | 3302:3366 | High-speed UAC2 × **synchronous** (0x0D, no feedback — SOF-locked nominal pacing), 16/24/32-bit alts to 384 kHz, FU#2 per-channel Volume with master Mute, plus an Other-Speed (full-speed) configuration in the dump |
 | `apple-usbc-35mm-05ac-110a-lsusb.txt` | Apple USB-C→3.5 mm adapter | 05ac:110a | **Negative fixture**: NOT UAC1 — 3 configurations: config 1 = UAC2 (bcdADC 2.00, protocol 0x20, clock source ID 9), configs 2/3 = UAC3/BADD (protocol 0x30). All data EPs **synchronous** (bmAttributes 13), no feedback. A UAC1 parser must reject it; the UAC2 parser must handle it at full speed |
+| `fosi-ds2-262a-0001-rawdescriptors.txt` | Fosi Audio DS2 | 262a:0001 | UAC2 at high speed, AC interface 1, per-alt packet sizes 200/300/400, data interval 1 |
+| `dawn-pro2-35d8-011d-rawdescriptors.txt` | DAWN PRO2 | 35d8:011d | UAC2 at high speed, AC interface 1, data interval 1, 776-byte packets |
+| `fiio-ka11-2972-0081-rawdescriptors.txt` | FIIO KA11 | 2972:0081 | UAC2 at high speed, AC interface 1, per-alt packet sizes 200/300/400 |
+| `cayin-n3-2d87-001a-rawdescriptors.txt` | Cayin N3 | 2d87:001a | UAC2 at high speed, **data interval 2** (250 us), feedback interval 4, 1024-byte packets |
+| `sb-xfi-surround-041e-3042-rawdescriptors.txt` | SB X-Fi Surround 5.1 | 041e:3042 | UAC1 at full speed, stereo 24-bit alt needs **294 bytes**, not alt1's 196; fixed rates per alt, 3-byte feedback |
 
 Parser edge cases covered across the set: 9-byte vs 7-byte endpoint
 descriptors; nonzero `bSynchAddress`/`bRefresh`; MaxPacketsOnly;

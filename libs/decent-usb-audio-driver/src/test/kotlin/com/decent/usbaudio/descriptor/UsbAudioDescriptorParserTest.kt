@@ -342,6 +342,7 @@ class UsbAudioDescriptorParserTest {
         assertEquals(4, alt1.subslotSize)
         assertEquals(32, alt1.bitResolution)
         assertEquals(776, alt1.maxPacketSize)
+        assertEquals(1, alt1.interval)
         assertEquals(UsbSyncType.ASYNC, alt1.syncType)
         assertTrue(alt1.sampleRates.isEmpty()) // UAC2: via clock RANGE
         val fb = alt1.feedback!!
@@ -459,6 +460,143 @@ class UsbAudioDescriptorParserTest {
         assertEquals(listOf(1, 2), vol.writeChannels)
 
         assertFalse(UsbAudioDescriptorParser.definitelyHighSpeed(fosiDs2))
+    }
+
+
+    // Verbatim Android getRawDescriptors() captures from USB diagnostic reports.
+    private val dawnPro2 = hex(
+            "12 01 00 02 EF 02 01 40 D8 35 1D 01 01 00 01 02 03 01 09 02 57 01 03 01 00 80 32 09 04 00 00 02",
+            "03 00 00 00 09 21 00 01 00 01 22 4A 00 07 05 86 03 40 00 08 07 05 05 03 40 00 08 08 0B 01 02 01",
+            "00 20 00 09 04 01 00 00 01 01 20 00 09 24 01 00 02 0A 40 00 00 08 24 0A 01 07 07 00 00 11 24 02",
+            "03 01 01 00 01 02 03 00 00 00 00 00 00 00 0C 24 03 04 02 03 00 0A 01 00 00 00 12 24 06 0A 03 00",
+            "00 00 00 0C 00 00 00 0C 00 00 00 00 09 04 02 00 00 01 02 20 00 09 04 02 01 02 01 02 20 00 10 24",
+            "01 03 00 01 01 00 00 00 02 03 00 00 00 00 06 24 02 01 02 10 07 05 07 05 08 03 01 08 25 01 00 00",
+            "02 02 00 07 05 83 11 04 00 04 09 04 02 02 02 01 02 20 00 10 24 01 03 00 01 01 00 00 00 02 03 00",
+            "00 00 00 06 24 02 01 03 18 07 05 07 05 08 03 01 08 25 01 00 00 02 02 00 07 05 83 11 04 00 04 09",
+            "04 02 03 02 01 02 20 00 10 24 01 03 00 01 01 00 00 00 02 03 00 00 00 00 06 24 02 01 04 20 07 05",
+            "07 05 08 03 01 08 25 01 00 00 02 02 00 07 05 83 11 04 00 04 09 04 02 04 02 01 02 20 00 10 24 01",
+            "03 00 01 00 00 00 80 02 00 00 00 00 00 06 24 02 01 04 20 07 05 07 05 08 03 01 08 25 01 00 00 02",
+            "02 00 07 05 83 11 04 00 04",
+    )
+
+    private val cayinN3 = hex(
+            "12 01 00 02 EF 02 01 40 87 2D 1A 00 00 01 01 02 03 01 09 02 37 01 02 01 00 C0 FA 08 0B 00 02 01",
+            "00 20 0D 09 04 00 00 00 01 01 20 00 09 24 01 00 02 04 40 00 00 08 24 0A 01 03 07 00 0E 11 24 02",
+            "02 01 01 00 01 02 03 00 00 00 00 00 00 0F 12 24 06 03 02 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "0C 24 03 04 02 03 00 03 01 00 00 11 09 04 01 00 00 01 02 20 00 09 04 01 01 02 01 02 20 00 10 24",
+            "01 02 00 01 01 00 00 00 02 03 00 00 00 00 06 24 02 01 04 18 07 05 02 05 00 04 02 08 25 01 01 00",
+            "02 10 00 07 05 82 11 04 00 04 09 04 01 02 02 01 02 20 00 10 24 01 02 00 01 01 00 00 00 02 03 00",
+            "00 00 00 06 24 02 01 04 10 07 05 02 05 00 04 02 08 25 01 01 00 02 10 00 07 05 82 11 04 00 04 09",
+            "04 01 03 02 01 02 20 00 10 24 01 02 00 01 01 00 00 00 02 03 00 00 00 00 06 24 02 01 04 20 07 05",
+            "02 05 00 04 02 08 25 01 01 00 02 10 00 07 05 82 11 04 00 04 09 04 01 04 02 01 02 20 00 10 24 01",
+            "02 00 01 00 00 00 80 02 00 00 00 00 00 06 24 02 01 04 20 07 05 02 05 00 04 02 08 25 01 01 00 02",
+            "10 00 07 05 82 11 04 00 04",
+    )
+
+    private val sbXfi = hex(
+            "12 01 10 01 00 00 00 40 1E 04 42 30 00 01 01 02 03 01 09 02 B6 02 03 01 00 80 C8 09 04 00 00 01",
+            "01 01 00 00 0A 24 01 00 01 3D 00 02 01 02 0C 24 02 01 01 01 00 06 3F 00 00 00 09 24 03 03 01 03",
+            "00 01 00 0C 24 02 04 03 06 00 02 03 00 00 00 09 24 03 06 01 01 00 04 00 09 24 03 08 02 06 00 01",
+            "00 09 05 83 03 02 00 0A 00 00 09 04 01 00 00 01 02 00 00 09 04 01 01 02 01 02 00 00 07 24 01 01",
+            "00 01 00 0B 24 02 01 02 02 10 01 80 BB 00 09 05 01 05 C4 00 01 00 01 07 25 01 00 00 00 00 09 05",
+            "81 11 03 00 01 05 00 09 04 01 02 02 01 02 00 00 07 24 01 01 00 01 00 0B 24 02 01 02 03 18 01 80",
+            "BB 00 09 05 01 05 26 01 01 00 01 07 25 01 00 00 00 00 09 05 81 11 03 00 01 05 00 09 04 01 03 02",
+            "01 02 00 00 07 24 01 01 00 01 00 0B 24 02 01 06 02 10 01 80 BB 00 09 05 01 05 4C 02 01 00 01 07",
+            "25 01 00 00 00 00 09 05 81 11 03 00 01 05 00 09 04 01 04 02 01 02 00 00 07 24 01 01 00 01 00 0B",
+            "24 02 01 06 03 18 01 80 BB 00 09 05 01 05 72 03 01 00 01 07 25 01 00 00 00 00 09 05 81 11 03 00",
+            "01 05 00 09 04 01 05 02 01 02 00 00 07 24 01 01 00 01 00 0B 24 02 01 02 02 10 01 00 77 01 09 05",
+            "01 05 84 01 01 00 01 07 25 01 00 00 00 00 09 05 81 11 03 00 01 05 00 09 04 01 06 02 01 02 00 00",
+            "07 24 01 01 00 01 00 0B 24 02 01 02 03 18 01 00 77 01 09 05 01 05 46 02 01 00 01 07 25 01 00 00",
+            "00 00 09 05 81 11 03 00 01 05 00 09 04 01 07 02 01 02 00 00 07 24 01 01 00 01 20 0B 24 02 03 02",
+            "02 10 01 44 AC 00 09 05 01 05 B4 00 01 00 01 07 25 01 00 00 00 00 09 05 81 11 03 00 01 05 00 09",
+            "04 01 08 02 01 02 00 00 07 24 01 01 00 01 20 0B 24 02 03 02 02 10 01 80 BB 00 09 05 01 05 C4 00",
+            "01 00 01 07 25 01 00 00 00 00 09 05 81 11 03 00 01 05 00 09 04 02 00 00 01 02 00 00 09 04 02 01",
+            "01 01 02 00 00 07 24 01 06 00 01 00 0B 24 02 01 02 02 10 01 80 BB 00 09 05 82 25 C4 00 01 00 00",
+            "07 25 01 00 00 00 00 09 04 02 02 01 01 02 00 00 07 24 01 06 00 01 00 0B 24 02 01 02 03 18 01 80",
+            "BB 00 09 05 82 25 26 01 01 00 00 07 25 01 00 00 00 00 09 04 02 03 01 01 02 00 00 07 24 01 06 00",
+            "01 00 0B 24 02 01 02 02 10 01 00 77 01 09 05 82 25 84 01 01 00 00 07 25 01 00 00 00 00 09 04 02",
+            "04 01 01 02 00 00 07 24 01 06 00 01 00 0B 24 02 01 02 03 18 01 00 77 01 09 05 82 25 46 02 01 00",
+            "00 07 25 01 00 00 00 00",
+    )
+
+    private val fiioKa11 = hex(
+            "12 01 00 02 EF 02 01 40 72 29 81 00 08 00 01 02 00 01 09 02 50 01 03 01 00 A0 32 09 04 00 00 01",
+            "03 00 00 00 09 21 00 01 00 01 22 5F 00 07 05 81 03 20 00 06 08 0B 01 02 01 00 20 03 09 04 01 00",
+            "00 01 01 20 03 09 24 01 00 02 0A 40 00 00 08 24 0A 01 07 07 00 00 11 24 02 03 01 01 00 01 02 03",
+            "00 00 00 00 00 00 00 0C 24 03 04 02 03 00 0A 01 00 00 00 12 24 06 0A 03 03 00 00 00 0C 00 00 00",
+            "0C 00 00 00 00 09 04 02 00 00 01 02 20 00 09 04 02 01 02 01 02 20 00 10 24 01 03 00 01 01 00 00",
+            "00 02 03 00 00 00 00 06 24 02 01 02 10 07 05 03 05 C8 00 01 08 25 01 00 00 02 02 00 07 05 84 11",
+            "04 00 04 09 04 02 02 02 01 02 20 00 10 24 01 03 00 01 01 00 00 00 02 03 00 00 00 00 06 24 02 01",
+            "03 18 07 05 03 05 2C 01 01 08 25 01 00 00 02 02 00 07 05 84 11 04 00 04 09 04 02 03 02 01 02 20",
+            "00 10 24 01 03 00 01 01 00 00 00 02 03 00 00 00 00 06 24 02 01 04 20 07 05 03 05 90 01 01 08 25",
+            "01 00 00 02 02 00 07 05 84 11 04 00 04 09 04 02 04 02 01 02 20 00 10 24 01 03 00 01 00 00 00 80",
+            "02 00 00 00 00 00 06 24 02 01 04 20 07 05 03 05 90 01 01 08 25 01 00 00 02 02 00 07 05 84 11 04",
+            "00 04",
+    )
+
+    @Test
+    fun cayinN3_dataIntervalIsTwoAndFeedbackIntervalIsFour() {
+        val layout = UsbAudioDescriptorParser.parse(cayinN3)!!
+        assertEquals(329, cayinN3.size)
+        assertEquals(UacVersion.UAC2, layout.uacVersion)
+        assertEquals(0, layout.controlInterfaceId)
+        assertEquals(1, layout.clockSourceId)
+        assertEquals(listOf(24, 16, 32, 32), layout.streamingAlts.map { it.bitResolution })
+        for (alt in layout.streamingAlts) {
+            assertEquals(1, alt.interfaceId)
+            assertEquals(2, alt.channels)
+            assertEquals(4, alt.subslotSize)
+            assertEquals(2, alt.interval)
+            assertEquals(1024, alt.maxPacketSize)
+            assertEquals(0x02, alt.endpointAddress)
+            assertEquals(UsbSyncType.ASYNC, alt.syncType)
+            assertEquals(0x82, alt.feedback!!.address)
+            assertEquals(4, alt.feedback.maxPacketSize)
+            assertEquals(4, alt.feedback.interval)
+        }
+        assertTrue(UsbAudioDescriptorParser.definitelyHighSpeed(cayinN3))
+    }
+
+    @Test
+    fun dawnPro2_andKa11_clockRequestsUseInterfaceOne() {
+        assertEquals(361, dawnPro2.size)
+        assertEquals(354, fiioKa11.size)
+        for (raw in listOf(dawnPro2, fiioKa11, fosiDs2)) {
+            val layout = UsbAudioDescriptorParser.parse(raw)!!
+            assertEquals(UacVersion.UAC2, layout.uacVersion)
+            assertEquals(1, layout.controlInterfaceId)
+            assertEquals(1, layout.clockSourceId)
+            assertEquals(0x0101, UacControl.uac2SetSampleRate(
+                    layout.clockSourceId, layout.controlInterfaceId, 44100).index)
+            assertEquals(listOf(16, 24, 32, 32), layout.streamingAlts.map { it.bitResolution })
+            assertEquals(listOf(2, 3, 4, 4), layout.streamingAlts.map { it.subslotSize })
+            assertTrue(layout.streamingAlts.all { it.interval == 1 && it.channels == 2 })
+        }
+        assertEquals(listOf(776, 776, 776, 776),
+                UsbAudioDescriptorParser.parse(dawnPro2)!!.streamingAlts.map { it.maxPacketSize })
+        assertEquals(listOf(200, 300, 400, 400),
+                UsbAudioDescriptorParser.parse(fiioKa11)!!.streamingAlts.map { it.maxPacketSize })
+    }
+
+    @Test
+    fun sbXfi_24bitAltHasItsOwnPacketBudget() {
+        val layout = UsbAudioDescriptorParser.parse(sbXfi)!!
+        assertEquals(712, sbXfi.size)
+        assertEquals(UacVersion.UAC1, layout.uacVersion)
+        assertEquals(0, layout.controlInterfaceId)
+        assertEquals(8, layout.streamingAlts.size)
+        val alt = layout.streamingAlts.first { it.altSetting == 2 }
+        assertEquals(2, alt.channels)
+        assertEquals(24, alt.bitResolution)
+        assertEquals(3, alt.subslotSize)
+        assertEquals(listOf(48000), alt.sampleRates)
+        assertEquals(294, alt.maxPacketSize)
+        assertEquals(1, alt.interval)
+        assertTrue(alt.rateFitsMaxPacket(48000))
+        assertFalse(alt.copy(maxPacketSize = 196).rateFitsMaxPacket(48000))
+        assertEquals(3, alt.feedback!!.maxPacketSize)
+        assertEquals(5, alt.feedback.refresh)
+        assertFalse(alt.hasSampleRateControl)
     }
 
     @Test

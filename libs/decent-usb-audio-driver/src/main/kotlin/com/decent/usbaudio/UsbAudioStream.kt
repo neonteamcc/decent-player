@@ -32,11 +32,12 @@ import android.util.Log
  * @param channelCount     Number of channels (1=mono, 2=stereo)
  * @param bitDepth         Bits per sample (16, 24, or 32)
  * @param maxPacketSize    Max packet size from endpoint descriptor
- * @param packetsPerSecond Isochronous service intervals per second:
+ * @param packetsPerSecond USB bus frames/microframes per second:
  *                         8000 at high speed (125 µs microframes, the
  *                         legacy default), 1000 at full speed (1 ms
  *                         frames). Use [UsbAudioDeviceInfo.busSpeed]'s
- *                         `packetsPerSecond`.
+ *                         `packetsPerSecond`; [dataInterval] sets how many
+ *                         bus frames each data packet spans.
  * @param feedbackMaxPacket wMaxPacketSize of the feedback endpoint
  *                         (3 = full-speed Q10.14, 4 = Q16.16), or 0 to
  *                         use the speed-appropriate spec default.
@@ -47,6 +48,9 @@ import android.util.Log
  *                         rational polyphase resampler (44.1k→48k for
  *                         devices without the 44.1 family). write() callers
  *                         feed inputSampleRate frames.
+ * @param dataInterval    Data endpoint bInterval (1..16); one packet spans
+ *                        2^(dataInterval-1) bus frames. Default 1 preserves
+ *                        callers without parsed endpoint descriptors.
  */
 class UsbAudioStream(
         fd: Int,
@@ -59,7 +63,8 @@ class UsbAudioStream(
         maxPacketSize: Int,
         packetsPerSecond: Int = 8000,
         feedbackMaxPacket: Int = 0,
-        inputSampleRate: Int = 0
+        inputSampleRate: Int = 0,
+        dataInterval: Int = 1
 ) {
 
     /** Native UsbAudioContext pointer. Exposed for NativeAudioEngine which
@@ -71,7 +76,7 @@ class UsbAudioStream(
         nativeHandle = nativeUsbAudioCreate(
                 fd, interfaceId, endpointOut, endpointFeedback,
                 sampleRate, channelCount, bitDepth, maxPacketSize,
-                packetsPerSecond, feedbackMaxPacket, inputSampleRate
+                packetsPerSecond, feedbackMaxPacket, inputSampleRate, dataInterval
         )
         if (nativeHandle == 0L) {
             Log.e(TAG, "nativeUsbAudioCreate returned 0 — check logcat for native errors")
@@ -220,7 +225,7 @@ class UsbAudioStream(
     private external fun nativeUsbAudioCreate(
             fd: Int, interfaceId: Int, endpointOut: Int, endpointFeedback: Int,
             sampleRate: Int, channelCount: Int, bitDepth: Int, maxPacketSize: Int,
-            packetsPerSecond: Int, feedbackMaxPacket: Int, inputSampleRate: Int
+            packetsPerSecond: Int, feedbackMaxPacket: Int, inputSampleRate: Int, dataInterval: Int
     ): Long
 
     private external fun nativeUsbAudioSetAltSetting(handle: Long, altSetting: Int): Boolean

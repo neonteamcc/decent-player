@@ -39,4 +39,10 @@ data class UsbAudioDeviceInfo(
 
     /** Full parsed descriptor layout, when parsing succeeded. */
     val layout: UsbAudioDeviceLayout? = null,
-)
+) {
+    /** Data endpoint bInterval for the selected playback alt (not the feedback interval). */
+    val dataInterval: Int
+        get() = layout?.streamingAlts?.firstOrNull {
+            it.interfaceId == interfaceId && it.altSetting == bestAltSetting
+        }?.interval ?: 1
+}
