@@ -313,64 +313,14 @@ static void *decodeThreadFunc(void *arg) {
         int srcBytesPerSample = engine->bitsPerSample / 8;
         int srcBytesPerFrame = srcBytesPerSample * engine->channels;
         int framesInBuffer = (int)(bytesRead / srcBytesPerFrame);
-        int totalSamples = framesInBuffer * engine->channels;
-
-        // Convert bit depth: source → DAC
-        const uint8_t *usbData;
-        int usbBytes;
-
-        if (engine->usbCtx->inputRate > 0) {
-            // In-family decimation (192k FLAC on a 96k device): canonicalize
-            // to full-scale int32, then decimate + convert into the USB
-            // context's transfer buffer. framesDecoded stays in the source
-            // domain, so position tracking is unaffected.
-            if (engine->bitsPerSample == 16) {
-                padInt16ToInt32(engine->pcmBuffer, engine->convertBuffer, totalSamples);
-            } else if (engine->bitsPerSample == 24) {
-                padInt24ToInt32(engine->pcmBuffer, engine->convertBuffer, totalSamples);
-            } else {
-                LOGE("Unsupported source depth %d for decimation", engine->bitsPerSample);
-                break;
-            }
-            usbBytes = resampleAndConvert(engine->usbCtx, engine->convertBuffer, framesInBuffer);
-            if (usbBytes <= 0) {
-                LOGE("resampleAndConvert produced no data");
-                break;
-            }
-            usbData = engine->usbCtx->transferBuffer;
-        } else if (engine->bitsPerSample == engine->dacBitDepth) {
-            // Same bit depth — direct
-            usbData = engine->pcmBuffer;
-            usbBytes = (int)bytesRead;
-        } else if (engine->bitsPerSample == 16 && engine->dacBitDepth == 32) {
-            padInt16ToInt32(engine->pcmBuffer, engine->convertBuffer, totalSamples);
-            usbData = engine->convertBuffer;
-            usbBytes = totalSamples * 4;
-        } else if (engine->bitsPerSample == 24 && engine->dacBitDepth == 32) {
-            // FLACParser outputs 24-bit as packed 3-byte samples (little-endian)
-            padInt24ToInt32(engine->pcmBuffer, engine->convertBuffer, totalSamples);
-            usbData = engine->convertBuffer;
-            usbBytes = totalSamples * 4;
-        } else if (engine->bitsPerSample == 24 && engine->dacBitDepth == 16) {
-            // 16-bit-only device playing 24-bit FLAC: TPDF-dithered reduction
-            ditherInt24ToInt16(engine->pcmBuffer, engine->convertBuffer, totalSamples,
-                               &engine->usbCtx->ditherState);
-            usbData = engine->convertBuffer;
-            usbBytes = totalSamples * 2;
-        } else {
-            LOGE("Unsupported bit-depth conversion: %d → %d",
-                 engine->bitsPerSample, engine->dacBitDepth);
+        if (engine->bitsPerSample != 16 && engine->bitsPerSample != 24 && engine->bitsPerSample != 32) {
+            LOGE("Unsupported source depth %d", engine->bitsPerSample);
             break;
         }
-
-        // Check running before USB submit (allows quick exit on stop)
         if (!engine->running.load()) break;
-
-        // Submit to USB (blocks naturally on URB pipeline = perfect backpressure)
-        // usbData always points at a driver-owned mutable buffer
-        // (pcmBuffer / convertBuffer / usbCtx->transferBuffer).
-        applySoftGain(engine->usbCtx, const_cast<uint8_t *>(usbData), usbBytes);
-        submitPcmToUrbs(engine->usbCtx, usbData, usbBytes);
+        // Use the same wire-format/SRC/gain/limiter boundary as JNI playback.
+        submitRawPcm(engine->usbCtx, engine->pcmBuffer, int(bytesRead), engine->bitsPerSample);
+        if (!engine->usbCtx->running.load()) break;
 
         int64_t newTotal = engine->framesDecoded.fetch_add(framesInBuffer) + framesInBuffer;
         // Log every ~1 second of audio

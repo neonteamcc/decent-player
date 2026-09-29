@@ -279,7 +279,11 @@ class UsbAudioDevice private constructor(private val context: Context) {
         // source of truth; the legacy UAC2-offset parsers below remain the
         // fallback when parsing fails.
         val layout = try {
-            conn.rawDescriptors?.let { UsbAudioDescriptorParser.parse(it) }
+            val activeConfiguration = ByteArray(1)
+            val active = if (conn.controlTransfer(0x80, 8, 0, 0, activeConfiguration, 1, 1000) == 1) {
+                (activeConfiguration[0].toInt() and 0xFF).takeIf { it > 0 }
+            } else null
+            conn.rawDescriptors?.let { UsbAudioDescriptorParser.parse(it, active) }
         } catch (t: Throwable) {
             Log.w(TAG, "Descriptor layout parse failed", t)
             null
@@ -308,7 +312,7 @@ class UsbAudioDevice private constructor(private val context: Context) {
                     "sync=${best.syncType} sampleRateControl=${best.hasSampleRateControl} " +
                     "maxPacketsOnly=${best.maxPacketsOnly}")
         } else {
-            clockSourceId = parseClockSourceId(conn)
+            clockSourceId = layout?.clockSourceId?.takeIf { it > 0 } ?: parseClockSourceId(conn)
             val (alt, bits) = parseBestAltSetting(conn)
             bestAlt = alt
             bestBits = bits
@@ -356,8 +360,28 @@ class UsbAudioDevice private constructor(private val context: Context) {
                 sampleRates = bestRates,
                 layout = layout,
         )
-        cachedDeviceInfo = info
-        return info
+        val selected = info.withPreferredFormat(preferFloat = false)
+        if (selected == null) {
+            Log.e(TAG, "No supported PCM/IEEE_FLOAT streaming alternate setting")
+            closeDevice()
+            return null
+        }
+        cachedDeviceInfo = selected
+        parsedAltSettings = layout?.streamingAlts?.filter { it.isSupported }
+            ?.map { it.altSetting to it.bitResolution } ?: parsedAltSettings
+        return selected
+    }
+
+    @Synchronized
+    fun previewPlaybackFormat(preferFloat: Boolean, channels: Int): UsbAudioDeviceInfo? =
+        cachedDeviceInfo?.withPreferredFormat(preferFloat, channels)
+
+    /** Called after draining the previous stream, before selecting its alt. */
+    @Synchronized
+    fun selectPlaybackFormat(preferFloat: Boolean, channels: Int? = null): UsbAudioDeviceInfo? {
+        val selected = cachedDeviceInfo?.withPreferredFormat(preferFloat, channels) ?: return null
+        cachedDeviceInfo = selected
+        return selected
     }
 
     /**
@@ -637,9 +661,7 @@ class UsbAudioDevice private constructor(private val context: Context) {
         // handles the ordering.
         val info = cachedDeviceInfo
         if (info?.uacVersion == UacVersion.UAC1) {
-            val alt = info.layout?.streamingAlts?.firstOrNull {
-                it.endpointAddress == info.endpointOutAddress
-            }
+            val alt = info.selectedAlt
             if (alt != null && !alt.hasSampleRateControl) {
                 Log.i(TAG, "setSampleRate($sampleRateHz): UAC1 endpoint has no " +
                         "SamplingFrequency control — device is fixed/auto, skipping")

@@ -176,12 +176,27 @@ int decimatorMaxOutFrames(const Decimator *d, int inFrames) {
     return inFrames / d->factor + 2;
 }
 
-int decimatorProcess(Decimator *d, const int32_t *in, int inFrames, int32_t *out) {
+// Keep both entry points in canonical full-scale units so calls can share history.
+static double canonicalSample(int32_t sample) { return (double)sample; }
+static double canonicalSample(float sample) { return (double)sample * 2147483648.0; }
+
+static void storeSample(double sample, int32_t *out) {
+    if (sample > 2147483647.0) sample = 2147483647.0;
+    if (sample < -2147483648.0) sample = -2147483648.0;
+    *out = (int32_t)llrint(sample);
+}
+
+static void storeSample(double sample, float *out) {
+    *out = (float)(sample / 2147483648.0);
+}
+
+template <typename Sample>
+static int process(Decimator *d, const Sample *in, int inFrames, Sample *out) {
     if (!d || inFrames <= 0) return 0;
     if (!ensureCapacity(d, inFrames)) return 0;
 
     const size_t n = (size_t)inFrames * d->channels;
-    for (size_t i = 0; i < n; i++) d->dbuf1[i] = (double)in[i];
+    for (size_t i = 0; i < n; i++) d->dbuf1[i] = canonicalSample(in[i]);
 
     int frames = stageProcess(d->stage1, d->dbuf1, inFrames, d->dbuf2);
     const double *result = d->dbuf2;
@@ -192,12 +207,17 @@ int decimatorProcess(Decimator *d, const int32_t *in, int inFrames, int32_t *out
 
     const size_t outN = (size_t)frames * d->channels;
     for (size_t i = 0; i < outN; i++) {
-        double v = result[i];
-        if (v > 2147483647.0) v = 2147483647.0;
-        if (v < -2147483648.0) v = -2147483648.0;
-        out[i] = (int32_t)llrint(v);
+        storeSample(result[i], out + i);
     }
     return frames;
+}
+
+int decimatorProcess(Decimator *d, const int32_t *in, int inFrames, int32_t *out) {
+    return process(d, in, inFrames, out);
+}
+
+int decimatorProcessFloat(Decimator *d, const float *in, int inFrames, float *out) {
+    return process(d, in, inFrames, out);
 }
 
 void decimatorDestroy(Decimator *d) {

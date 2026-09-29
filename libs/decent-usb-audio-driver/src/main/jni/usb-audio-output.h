@@ -14,6 +14,7 @@
 #include <atomic>
 #include <cstdint>
 #include <linux/usbdevice_fs.h>
+#include "peak-limiter.h"
 
 struct Decimator;          // decimator.h — in-family ÷2/÷4 half-band
 struct RationalResampler;  // resampler.h — cross-family L/M polyphase
@@ -84,6 +85,15 @@ struct UsbAudioContext {
     int32_t bytesPerSample;
     int32_t bytesPerFrame;
     int32_t maxPacketSize;
+    int32_t validBitDepth = 0;
+    int32_t wireFormat = 0; // 0 = signed integer PCM; 1 = IEEE_FLOAT32 LE
+    std::atomic<bool> limiterEnabled{false};
+    bool limiterApplied = false; // write-thread-owned snapshot
+    UsbPeakLimiter limiter;
+    uint8_t *floatInputBuffer = nullptr;
+    int32_t floatInputCapacity = 0;
+    uint8_t *floatOutputBuffer = nullptr;
+    int32_t floatOutputCapacity = 0;
 
     // ── Bus-speed-dependent stream geometry (set at create) ─────
     /**
@@ -223,6 +233,12 @@ struct UsbAudioContext {
  * Blocks when the URB ring is full (natural backpressure from DAC clock).
  */
 void submitPcmToUrbs(UsbAudioContext *ctx, const uint8_t *pcmData, int totalBytes);
+
+/** SRC and gain in float, optional limiting, then final wire packing.
+ * Both entry points update framesWritten once. */
+void submitFloatPcm(UsbAudioContext *ctx, const float *samples, int frames);
+void submitRawPcm(UsbAudioContext *ctx, const uint8_t *pcm, int bytes, int inputBits);
+
 
 /** 16-bit → 32-bit: shift left 16. */
 void padInt16ToInt32(const uint8_t *src, uint8_t *dst, int numSamples);

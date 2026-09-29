@@ -353,10 +353,10 @@ class UsbAudioDescriptorParserTest {
 
         assertEquals(16, layout.streamingAlts[1].bitResolution)
         assertEquals(388, layout.streamingAlts[1].maxPacketSize)
-        // alt3 is the DSD alt (bmFormats RAW_DATA) — bit depth parses as 32;
-        // format-tag awareness is a future refinement, the best-alt picker
-        // takes the FIRST highest-bits alt (alt1, PCM) either way.
+        // DSD has a 32-bit slot but must never be selected as integer PCM.
         assertEquals(32, layout.streamingAlts[2].bitResolution)
+        assertEquals(UsbSampleFormat.UNSUPPORTED, layout.streamingAlts[2].sampleFormat)
+        assertEquals(1, layout.selectPlaybackAlt(1, true)?.altSetting)
 
         val vol = layout.volume!!
         assertEquals(10, vol.unitId)           // OT#20 (Speaker) ← FU#10

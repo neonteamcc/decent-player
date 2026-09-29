@@ -54,16 +54,25 @@ jobs:
         working-directory: libs
         run: ./gradlew --no-daemon :decent-usb-audio-driver:testDebugUnitTest :decent-usb-audio-wrapper-media3:testDebugUnitTest
 
-      - name: Unit tests (USB packet timing)
+      - name: Unit tests (USB timing, float output and rate conversion)
         run: |
-          g++ -std=c++11 -Wall -Werror \
-            -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
-            -Ilibs/decent-usb-audio-driver/src/test/cpp/stubs \
-            libs/decent-usb-audio-driver/src/test/cpp/usb_packet_timing_test.cpp \
+          for test in usb_packet_timing usb_float_output; do
+            g++ -std=c++11 -Wall -Werror -fsanitize=address,undefined \
+              -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
+              -Ilibs/decent-usb-audio-driver/src/test/cpp/stubs \
+              "libs/decent-usb-audio-driver/src/test/cpp/${test}_test.cpp" \
+              libs/decent-usb-audio-driver/src/main/jni/usb-float-processing.cpp \
+              libs/decent-usb-audio-driver/src/main/jni/decimator.cpp \
+              libs/decent-usb-audio-driver/src/main/jni/resampler.cpp \
+              -o "/tmp/${test}_test"
+            "/tmp/${test}_test"
+          done
+          g++ -std=c++11 -Wall -Werror -fsanitize=address,undefined \
+            libs/decent-usb-audio-driver/src/test/cpp/float_resampling_test.cpp \
             libs/decent-usb-audio-driver/src/main/jni/decimator.cpp \
             libs/decent-usb-audio-driver/src/main/jni/resampler.cpp \
-            -o /tmp/usb_packet_timing_test
-          /tmp/usb_packet_timing_test
+            -o /tmp/float_resampling_test
+          /tmp/float_resampling_test
 
       - name: Unit tests (FLAC seek table sanitizer)
         run: |

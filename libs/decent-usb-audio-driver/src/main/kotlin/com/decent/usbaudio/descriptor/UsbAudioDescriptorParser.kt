@@ -72,7 +72,10 @@ object UsbAudioDescriptorParser {
      * The first audio function wins; UAC3 functions are reported as
      * [UacVersion.UAC3] with no streaming alts (unsupported).
      */
-    fun parse(raw: ByteArray): UsbAudioDeviceLayout? {
+    @JvmOverloads
+    fun parse(raw: ByteArray, configurationValue: Int? = null): UsbAudioDeviceLayout? {
+        var selectedConfiguration: Int? = null
+        var inSelectedConfiguration = configurationValue == null
         var uacVersion = UacVersion.UNKNOWN
         var controlInterfaceId = -1
         var clockSourceId = -1
@@ -104,6 +107,16 @@ object UsbAudioDescriptorParser {
             val len = raw[i].toInt() and 0xFF
             if (len < 2 || i + len > raw.size) break
             val type = raw[i + 1].toInt() and 0xFF
+            if (type == 0x02 && len >= 9) {
+                if (selectedConfiguration != null) break
+                val value = raw[i + 5].toInt() and 0xFF
+                inSelectedConfiguration = configurationValue == null || value == configurationValue
+                if (inSelectedConfiguration) selectedConfiguration = value
+            }
+            if (!inSelectedConfiguration) {
+                i += len
+                continue
+            }
 
             when (type) {
                 DT_INTERFACE -> if (len >= 9) {
@@ -265,6 +278,8 @@ object UsbAudioDescriptorParser {
         var channels = 0
         var subslotSize = 0
         var bitResolution = 0
+        var sampleFormat = UsbSampleFormat.UNSUPPORTED
+        var formatType = 0
         var rates: List<Int> = emptyList()
         var continuous: IntRange? = null
 
@@ -284,9 +299,26 @@ object UsbAudioDescriptorParser {
         var maxPacketsOnly = false
 
         fun onCsInterface(raw: ByteArray, i: Int, len: Int, subtype: Int) {
+            if (subtype == AS_FORMAT_TYPE && len >= 4) formatType = raw[i + 3].toInt() and 0xFF
             when (subtype) {
-                AS_GENERAL -> if (uacVersion == UacVersion.UAC2 && len >= 16) {
-                    channels = raw[i + 10].toInt() and 0xFF
+                AS_GENERAL -> when {
+                    uacVersion == UacVersion.UAC2 && len >= 16 -> {
+                        channels = raw[i + 10].toInt() and 0xFF
+                        val type = raw[i + 5].toInt() and 0xFF
+                        val formats = le32(raw, i + 6)
+                        sampleFormat = if (type != 1) UsbSampleFormat.UNSUPPORTED else when (formats) {
+                            1 -> UsbSampleFormat.PCM
+                            4 -> UsbSampleFormat.IEEE_FLOAT
+                            else -> UsbSampleFormat.UNSUPPORTED
+                        }
+                    }
+                    uacVersion == UacVersion.UAC1 && len >= 7 -> {
+                        sampleFormat = when (le16(raw, i + 5)) {
+                            1 -> UsbSampleFormat.PCM
+                            3 -> UsbSampleFormat.IEEE_FLOAT
+                            else -> UsbSampleFormat.UNSUPPORTED
+                        }
+                    }
                 }
                 AS_FORMAT_TYPE -> when (uacVersion) {
                     UacVersion.UAC2 -> if (len >= 6) {
@@ -384,6 +416,7 @@ object UsbAudioDescriptorParser {
                     feedback = feedback,
                     hasSampleRateControl = sampleRateControl,
                     maxPacketsOnly = maxPacketsOnly,
+                    sampleFormat = if (formatType == 1) sampleFormat else UsbSampleFormat.UNSUPPORTED,
             )
         }
     }
@@ -417,6 +450,9 @@ object UsbAudioDescriptorParser {
         }
         return false
     }
+
+    private fun le32(raw: ByteArray, off: Int): Int =
+        le16(raw, off) or (le16(raw, off + 2) shl 16)
 
     private fun le16(raw: ByteArray, off: Int): Int =
             (raw[off].toInt() and 0xFF) or ((raw[off + 1].toInt() and 0xFF) shl 8)

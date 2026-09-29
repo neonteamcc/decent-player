@@ -22,6 +22,7 @@ import com.decent.usbaudio.NativeAudioEngine
 import com.decent.usbaudio.UsbAudioDevice
 import com.decent.usbaudio.UsbAudioStream
 import com.decent.usbaudio.descriptor.UacVersion
+import com.decent.usbaudio.descriptor.UsbSampleFormat
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -46,6 +47,21 @@ class UsbAudioSink(
     private val context: Context,
     private val config: UsbAudioSinkConfig = UsbAudioSinkConfig()
 ) : ForwardingAudioSink(delegate) {
+
+    private val streamState = UsbLimiterState<UsbAudioStream> { stream, enabled ->
+        stream.setLimiterEnabled(enabled)
+    }
+    private var currentWireFormat = UsbSampleFormat.PCM
+    private var currentUsbAltSetting = -1
+
+    /** Independent, opt-in output protection. Future streams inherit this state. */
+    fun setLimiterEnabled(enabled: Boolean) = streamState.setEnabled(enabled)
+
+    private fun wireFormatChanges(format: Format): Boolean {
+        val next = usbAudioDevice.previewPlaybackFormat(format.pcmEncoding == C.ENCODING_PCM_FLOAT, format.channelCount)
+            ?: return false
+        return next.sampleFormat != currentWireFormat || next.bestAltSetting != currentUsbAltSetting
+    }
 
     /** Source file bit depth (16, 24, 32). Auto-detected from NativeAudioEngine. */
     private var trackBitDepth: Int = 0
@@ -117,7 +133,7 @@ class UsbAudioSink(
         }
     }
 
-    private var usbAudioStream: UsbAudioStream? = null
+    private val usbAudioStream: UsbAudioStream? get() = streamState.current()
     private val usbAudioDevice = UsbAudioDevice.getInstance(context)
     private var usbStreamingThread: UsbStreamingThread? = null
     private var nativeEngine: NativeAudioEngine? = null
@@ -179,7 +195,7 @@ class UsbAudioSink(
     override fun configure(audioSinkConfig: AudioSink.AudioSinkConfig) {
         val format = audioSinkConfig.format
         if (config.bitPerfectEnabled && usbAudioStream != null && nativeEngine == null &&
-            (format.sampleRate != currentSampleRate || format.channelCount != currentChannelCount)) {
+            (format.sampleRate != currentSampleRate || format.channelCount != currentChannelCount || wireFormatChanges(format))) {
             pendingConfiguration = audioSinkConfig
             usbStreamingThread?.finish()
             Log.i(TAG, "USB configuration deferred until queued audio ends: " +
@@ -244,7 +260,7 @@ class UsbAudioSink(
             val device = usbAudioDevice.findUsbAudioDevice()
             if (device != null && usbAudioDevice.hasPermission(device)) {
                 val reused = sr == currentSampleRate && ch == currentChannelCount &&
-                        usbAudioStream?.isAlive == true
+                        usbAudioStream?.isAlive == true && !wireFormatChanges(inputFormat)
                 configureUsbBitPerfect(sr, ch, enc)
                 if (!reused) {
                     windowOffsetUs = -1L
@@ -559,8 +575,10 @@ class UsbAudioSink(
         // is still running. If we reach here, the engine is already dead or null.
 
         // Cache check — avoid needless USB stream recreation
+        val nextWire = usbAudioDevice.previewPlaybackFormat(encoding == C.ENCODING_PCM_FLOAT, channelCount)
         if (sampleRate == currentSampleRate && channelCount == currentChannelCount
-            && usbAudioStream?.isAlive == true) {
+            && usbAudioStream?.isAlive == true && nextWire?.sampleFormat == currentWireFormat
+            && nextWire.bestAltSetting == currentUsbAltSetting) {
             Log.d(TAG, "USB stream cached for rate=$sampleRate ch=$channelCount — reusing")
             // Engine will be created lazily in handleBuffer when currentTrackPath is set
             return
@@ -575,10 +593,16 @@ class UsbAudioSink(
             return
         }
 
+        deviceInfo = usbAudioDevice.selectPlaybackFormat(encoding == C.ENCODING_PCM_FLOAT, channelCount)
+        if (deviceInfo == null) {
+            Log.e(TAG, "No supported USB sample format for $channelCount channels")
+            return
+        }
+
         // Always use the DAC's highest supported bit depth (standard practice).
         // Sources with lower bit depth are zero-padded in the LSBs; sources
         // deeper than the device get TPDF-dithered reduction in native code.
-        val bitDepth = deviceInfo.bestBitDepth
+        val bitDepth = deviceInfo.containerBitDepth
         val altSetting = deviceInfo.bestAltSetting
 
         // Rate mapping: sources the device can't run at play via rate
@@ -606,7 +630,9 @@ class UsbAudioSink(
             packetsPerSecond = deviceInfo.busSpeed.packetsPerSecond,
             feedbackMaxPacket = feedbackMaxPacket(deviceInfo, altSetting),
             inputSampleRate = conversionInput,
-            dataInterval = deviceInfo.dataInterval
+            dataInterval = deviceInfo.dataInterval,
+            wireFormat = deviceInfo.sampleFormat,
+            validBitDepth = deviceInfo.bestBitDepth,
         )
 
         if (!stream.isReady) {
@@ -635,7 +661,9 @@ class UsbAudioSink(
             Log.w(TAG, "setAlt(0) failed — stale fd, reopening device...")
             usbAudioDevice.closeDevice()
             stream.release()
-            deviceInfo = usbAudioDevice.openDevice(usbDevice)
+            deviceInfo = usbAudioDevice.openDevice(usbDevice)?.let {
+                usbAudioDevice.selectPlaybackFormat(encoding == C.ENCODING_PCM_FLOAT, channelCount)
+            }
             if (deviceInfo == null) {
                 Log.e(TAG, "Failed to reopen USB device")
                 return
@@ -652,7 +680,9 @@ class UsbAudioSink(
                 packetsPerSecond = deviceInfo.busSpeed.packetsPerSecond,
                 feedbackMaxPacket = feedbackMaxPacket(deviceInfo, altSetting),
                 inputSampleRate = conversionInput,
-                dataInterval = deviceInfo.dataInterval
+                dataInterval = deviceInfo.dataInterval,
+                wireFormat = deviceInfo.sampleFormat,
+                validBitDepth = deviceInfo.bestBitDepth,
             )
             if (!stream.isReady) {
                 Log.e(TAG, "USB stream recreation failed after reopen")
@@ -711,7 +741,9 @@ class UsbAudioSink(
             return
         }
 
-        usbAudioStream = stream
+        currentWireFormat = deviceInfo.sampleFormat
+        currentUsbAltSetting = deviceInfo.bestAltSetting
+        streamState.attach(stream)
         setActiveVolumeStream(stream)
         currentSampleRate = sampleRate
         currentUsbRate = usbRate
@@ -852,8 +884,7 @@ class UsbAudioSink(
     // ── USB stream release ──────────────────────────────────────────
 
     private fun releaseUsbStream() {
-        val stream = usbAudioStream ?: return
-        usbAudioStream = null
+        val stream = streamState.detach() ?: return
         setActiveVolumeStream(null)
 
         // Stop USB stream FIRST — sets ctx->running=false, which unblocks

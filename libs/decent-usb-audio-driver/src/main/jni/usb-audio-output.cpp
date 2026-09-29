@@ -42,48 +42,6 @@
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-// ── Float → PCM conversion ──────────────────────────────────────────
-
-static inline float clampf(float v) { return v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v); }
-
-// Bit-perfect float→int conversion matching FFmpeg's libswresample normalization.
-// FFmpeg normalizes: int / 2^N (e.g., int16 / 32768.0).
-// Reconversion: float × 2^N gives exact round-trip for 16-bit and 24-bit because:
-//   - 2^N is exactly representable in float32 (power of 2)
-//   - float32 has 24-bit mantissa, covering int16 (16-bit) and int24 (24-bit) exactly
-// Clamp after scaling to handle the asymmetry: -1.0 × 32768 = -32768 (valid min),
-// but +1.0 × 32768 = 32768 (exceeds max 32767, needs clamping).
-
-static void convertFloatToInt16(const float *src, uint8_t *dst, int n) {
-    auto *out = reinterpret_cast<int16_t *>(dst);
-    for (int i = 0; i < n; i++) {
-        float s = clampf(src[i]) * 32768.0f;
-        if (s > 32767.0f) s = 32767.0f;
-        if (s < -32768.0f) s = -32768.0f;
-        out[i] = (int16_t)s;
-    }
-}
-static void convertFloatToInt24(const float *src, uint8_t *dst, int n) {
-    for (int i = 0; i < n; i++) {
-        float s = clampf(src[i]) * 8388608.0f;
-        if (s > 8388607.0f) s = 8388607.0f;
-        if (s < -8388608.0f) s = -8388608.0f;
-        int32_t v = (int32_t)s;
-        dst[i*3] = v & 0xFF; dst[i*3+1] = (v>>8) & 0xFF; dst[i*3+2] = (v>>16) & 0xFF;
-    }
-}
-static void convertFloatToInt32(const float *src, uint8_t *dst, int n) {
-    auto *out = reinterpret_cast<int32_t *>(dst);
-    for (int i = 0; i < n; i++) {
-        // Use double: float32 can't represent 2147483648.0 exactly (needs 31 bits,
-        // float32 has 24-bit mantissa). Double has 53-bit mantissa — sufficient.
-        double s = (double)clampf(src[i]) * 2147483648.0;
-        if (s > 2147483647.0) s = 2147483647.0;
-        if (s < -2147483648.0) s = -2147483648.0;
-        out[i] = (int32_t)s;
-    }
-}
-
 // ── Ring buffer management ──────────────────────────────────────────
 
 /**
@@ -450,12 +408,17 @@ JNIEXPORT jlong JNICALL
 Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioCreate(
         JNIEnv *, jobject, jint fd, jint ifId, jint epOut, jint epFb,
         jint rate, jint ch, jint bits, jint maxPkt, jint packetsPerSecond,
-        jint feedbackMaxPacket, jint inputSampleRate, jint dataInterval) {
+        jint feedbackMaxPacket, jint inputSampleRate, jint dataInterval, jint wireFormat, jint validBits = 0) {
     LOGI("Create: fd=%d ep=0x%02x rate=%d ch=%d bits=%d maxPkt=%d busFps=%d fbMaxPkt=%d inRate=%d bInterval=%d",
          fd, epOut, rate, ch, bits, maxPkt, packetsPerSecond, feedbackMaxPacket,
          inputSampleRate, dataInterval);
     if (dataInterval < 1 || dataInterval > 16) {
         LOGE("Create: invalid data endpoint bInterval=%d", dataInterval);
+        return 0;
+    }
+    if (rate <= 0 || ch <= 0 || (bits != 16 && bits != 24 && bits != 32) ||
+        (wireFormat != 0 && wireFormat != 1) || (wireFormat == 1 && bits != 32)) {
+        LOGE("Create: unsupported rate/channel/sample format");
         return 0;
     }
     auto *ctx = new(std::nothrow) UsbAudioContext();
@@ -470,6 +433,15 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioCreate(
     ctx->bytesPerSample = bits / 8;
     ctx->bytesPerFrame = (bits / 8) * ch;
     ctx->maxPacketSize = maxPkt;
+    ctx->wireFormat = wireFormat;
+    ctx->validBitDepth = validBits > 0 ? validBits : bits;
+    if (ctx->validBitDepth < 1 || ctx->validBitDepth > bits ||
+        (wireFormat == 1 && ctx->validBitDepth != 32)) {
+        delete ctx;
+        return 0;
+    }
+    ctx->limiter.configure(rate);
+    LOGI("Create: wireFormat=%s limiter=off", wireFormat == 1 ? "IEEE_FLOAT32" : "PCM_INTEGER");
 
     // Bus-speed geometry. High speed: one URB = 8 microframe packets =
     // 1 ms, 80 URBs = 80 ms in flight (unchanged legacy behavior).
@@ -612,6 +584,7 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioStart(
     }
     ctx->running.store(true);
     ctx->framesWritten = 0;
+    ctx->limiter.reset();
     ctx->submitIdx = 0;
     ctx->reapIdx = 0;
     ctx->urbsInFlight = 0;
@@ -656,78 +629,19 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioWrite(
         JNIEnv *env, jobject, jlong h, jfloatArray pcm) {
     auto *ctx = reinterpret_cast<UsbAudioContext *>(h);
     if (!ctx || !ctx->running.load()) return;
+    const int samples = env->GetArrayLength(pcm);
+    if (samples <= 0 || samples % ctx->channelCount != 0) return;
+    jfloat *data = env->GetFloatArrayElements(pcm, nullptr);
+    if (!data) return;
+    submitFloatPcm(ctx, data, samples / ctx->channelCount);
+    env->ReleaseFloatArrayElements(pcm, data, JNI_ABORT);
+}
 
-    jint totalSamples = env->GetArrayLength(pcm);
-    if (totalSamples <= 0) return;
-    int totalFrames = totalSamples / ctx->channelCount;
-    int totalBytes = totalSamples * ctx->bytesPerSample;
-
-    // Resize transfer buffer if needed
-    if (!ctx->transferBuffer || ctx->transferBufferCapacity < totalBytes) {
-        free(ctx->transferBuffer);
-        ctx->transferBuffer = (uint8_t *)malloc(totalBytes);
-        ctx->transferBufferCapacity = totalBytes;
-    }
-
-    struct timespec writeStart, writeEnd;
-    clock_gettime(CLOCK_MONOTONIC, &writeStart);
-    static long writeCallCount = 0;
-    writeCallCount++;
-
-    // Convert float PCM to target bit depth
-    jfloat *f = env->GetFloatArrayElements(pcm, nullptr);
-    if (!f) return;
-
-    // In-family decimation path: float → full-scale int32 → half-band
-    // decimate → DAC depth (dithered when reducing to 16-bit).
-    if (ctx->inputRate > 0) {
-        int canonBytes = totalSamples * 4;
-        if (!ensureBuffer(&ctx->canonicalBuffer, &ctx->canonicalCapacity, canonBytes)) {
-            env->ReleaseFloatArrayElements(pcm, f, JNI_ABORT);
-            return;
-        }
-        convertFloatToInt32(f, ctx->canonicalBuffer, totalSamples);
-        env->ReleaseFloatArrayElements(pcm, f, JNI_ABORT);
-
-        int outBytes = resampleAndConvert(ctx, ctx->canonicalBuffer, totalFrames);
-        if (outBytes > 0) {
-            applySoftGain(ctx, ctx->transferBuffer, outBytes);
-            submitPcmToUrbs(ctx, ctx->transferBuffer, outBytes);
-            ctx->framesWritten += outBytes / ctx->bytesPerFrame;
-        }
-        return;
-    }
-
-    switch (ctx->bitDepth) {
-        case 16: convertFloatToInt16(f, ctx->transferBuffer, totalSamples); break;
-        case 24: convertFloatToInt24(f, ctx->transferBuffer, totalSamples); break;
-        case 32: convertFloatToInt32(f, ctx->transferBuffer, totalSamples); break;
-        default: env->ReleaseFloatArrayElements(pcm, f, JNI_ABORT); return;
-    }
-    env->ReleaseFloatArrayElements(pcm, f, JNI_ABORT);
-
-    // Submit converted PCM to USB pipeline (shared with raw path)
-    applySoftGain(ctx, ctx->transferBuffer, totalBytes);
-    submitPcmToUrbs(ctx, ctx->transferBuffer, totalBytes);
-
-    ctx->framesWritten += totalFrames;
-
-    clock_gettime(CLOCK_MONOTONIC, &writeEnd);
-    long writeUs = (writeEnd.tv_sec - writeStart.tv_sec) * 1000000L +
-                   (writeEnd.tv_nsec - writeStart.tv_nsec) / 1000L;
-    // Log every call that took > 10ms, or every 100th call
-    if (writeUs > 10000 || writeCallCount % 100 == 0) {
-        LOGI("nativeWrite #%ld: %d samples, %ldus (%.1fms), inflight=%d",
-             writeCallCount, totalSamples, writeUs, writeUs / 1000.0, ctx->urbsInFlight);
-    }
-
-    // Periodic logging (~once per second)
-    if (ctx->framesWritten % ctx->sampleRate < (int64_t)totalFrames) {
-        LOGI("Write: %lld frames (~%.0f sec) inflight=%d fpmf=%.4f (%.1f Hz)",
-             (long long)ctx->framesWritten, (double)ctx->framesWritten/ctx->sampleRate,
-             ctx->urbsInFlight, ctx->calibratedFpmf,
-             ctx->calibratedFpmf * ctx->packetsPerSecond);
-    }
+JNIEXPORT void JNICALL
+Java_com_decent_usbaudio_UsbAudioStream_nativeSetLimiterEnabled(
+        JNIEnv *, jobject, jlong h, jboolean enabled) {
+    auto *ctx = reinterpret_cast<UsbAudioContext *>(h);
+    if (ctx) ctx->limiterEnabled.store(enabled == JNI_TRUE, std::memory_order_relaxed);
 }
 
 JNIEXPORT void JNICALL
@@ -748,6 +662,7 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeFlush(
     ctx->frameAccumulator = 0.0;
     ctx->residualBytes = 0;
     ctx->framesWritten = 0;
+    ctx->limiter.reset();
     if (ctx->decimator) decimatorReset(ctx->decimator);
     if (ctx->resampler) resamplerReset(ctx->resampler);
     LOGI("Flush: frameAccumulator, residual, framesWritten (and rate converter) reset");
@@ -819,6 +734,8 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioDestroy(
     free(ctx->feedbackUrb);
     ctx->feedbackUrb = nullptr;
     free(ctx->transferBuffer);
+    free(ctx->floatInputBuffer);
+    free(ctx->floatOutputBuffer);
     decimatorDestroy(ctx->decimator);
     resamplerDestroy(ctx->resampler);
     free(ctx->canonicalBuffer);
@@ -1118,6 +1035,7 @@ void submitPcmToUrbs(UsbAudioContext *ctx, const uint8_t *pcmData, int totalByte
             ? ctx->maxPacketSize / ctx->bytesPerFrame : INT32_MAX;
 
     while (offset < dataLen && ctx->running.load()) {
+        const double accumulatorBeforeUrb = ctx->frameAccumulator;
         int pktSizes[USB_AUDIO_PACKETS_PER_URB];
         int numPackets = 0;
         int urbBytes = 0;
@@ -1146,13 +1064,19 @@ void submitPcmToUrbs(UsbAudioContext *ctx, const uint8_t *pcmData, int totalByte
             urbBytes += b;
             numPackets++;
         }
-        if (numPackets <= 0 || urbBytes <= 0) break;
+        if (numPackets <= 0 || urbBytes <= 0) {
+            ctx->frameAccumulator = accumulatorBeforeUrb;
+            break;
+        }
 
         // Never submit short URBs (< full packet count). Short URBs create
         // empty ISO microframes in the xHCI schedule — the DAC receives
         // silence for those microframes → audible click/pop.
         // Instead, save leftover data for the next write() call.
         if (numPackets < ctx->packetsPerUrb) {
+            // These packets are retained, not submitted. Their clock phase
+            // must be planned again together with the next input chunk.
+            ctx->frameAccumulator = accumulatorBeforeUrb;
             int leftover = dataLen - offset;
             if (leftover > 0 && leftover < (int)sizeof(ctx->residualBuffer)) {
                 memcpy(ctx->residualBuffer, data + offset, leftover);
@@ -1208,95 +1132,11 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioWriteRaw(
         JNIEnv *env, jobject, jlong h, jbyteArray pcm, jint inputBitDepth) {
     auto *ctx = reinterpret_cast<UsbAudioContext *>(h);
     if (!ctx || !ctx->running.load()) return;
-
-    jint inputBytes = env->GetArrayLength(pcm);
-    if (inputBytes <= 0) return;
-
-    int inputBps = inputBitDepth / 8;
-    int totalSamples = inputBytes / inputBps;
-    int totalFrames = totalSamples / ctx->channelCount;
-    int outputBytes = totalSamples * ctx->bytesPerSample;
-
-    // Resize transfer buffer if needed
-    if (!ctx->transferBuffer || ctx->transferBufferCapacity < outputBytes) {
-        free(ctx->transferBuffer);
-        ctx->transferBuffer = (uint8_t *)malloc(outputBytes);
-        ctx->transferBufferCapacity = outputBytes;
-    }
-
-    jbyte *rawData = env->GetByteArrayElements(pcm, nullptr);
-    if (!rawData) return;
-
-    // In-family decimation path (e.g. 192k source on a 96k device):
-    // canonicalize to full-scale int32 → half-band decimate → convert to
-    // the DAC depth. The non-decimated paths below stay byte-identical.
-    if (ctx->inputRate > 0) {
-        int canonBytes = totalSamples * 4;
-        if (!ensureBuffer(&ctx->canonicalBuffer, &ctx->canonicalCapacity, canonBytes)) {
-            env->ReleaseByteArrayElements(pcm, rawData, JNI_ABORT);
-            return;
-        }
-        switch (inputBitDepth) {
-            case 16: padInt16ToInt32((uint8_t *)rawData, ctx->canonicalBuffer, totalSamples); break;
-            case 24: padInt24ToInt32((uint8_t *)rawData, ctx->canonicalBuffer, totalSamples); break;
-            // Pipeline convention: PCM_32BIT carries sign-extended 24-in-32
-            // (libFLAC extractor) — shift to full scale, same as the
-            // non-decimated 32→32 path.
-            case 32: shiftInt32From24((uint8_t *)rawData, ctx->canonicalBuffer, totalSamples); break;
-            default:
-                LOGE("WriteRaw: unsupported input depth %d for decimation", inputBitDepth);
-                env->ReleaseByteArrayElements(pcm, rawData, JNI_ABORT);
-                return;
-        }
-        env->ReleaseByteArrayElements(pcm, rawData, JNI_ABORT);
-
-        int outBytes = resampleAndConvert(ctx, ctx->canonicalBuffer, totalFrames);
-        if (outBytes > 0) {
-            applySoftGain(ctx, ctx->transferBuffer, outBytes);
-            submitPcmToUrbs(ctx, ctx->transferBuffer, outBytes);
-            ctx->framesWritten += outBytes / ctx->bytesPerFrame;
-        }
-        return;
-    }
-
-    // Bit-depth matching: pad input up to the DAC's bit depth (lossless
-    // integer ops), or reduce with TPDF dither when the DAC is shallower
-    // than the source (16-bit-only devices playing hi-res content).
-    if (inputBitDepth == ctx->bitDepth) {
-        // Same bit depth: zero-copy
-        memcpy(ctx->transferBuffer, rawData, inputBytes);
-    } else if (inputBitDepth == 16 && ctx->bitDepth == 32) {
-        padInt16ToInt32((uint8_t *)rawData, ctx->transferBuffer, totalSamples);
-    } else if (inputBitDepth == 24 && ctx->bitDepth == 32) {
-        // 24-bit packed (3 bytes/sample) → 32-bit: sign-extend + shift left 8
-        padInt24ToInt32((uint8_t *)rawData, ctx->transferBuffer, totalSamples);
-    } else if (inputBitDepth == 32 && ctx->bitDepth == 32) {
-        // libFLAC 24-bit → PCM_32BIT (sign-extended): shift left 8 to fill 32-bit range
-        shiftInt32From24((uint8_t *)rawData, ctx->transferBuffer, totalSamples);
-    } else if (inputBitDepth == 24 && ctx->bitDepth == 16) {
-        ditherInt24ToInt16((uint8_t *)rawData, ctx->transferBuffer, totalSamples,
-                           &ctx->ditherState);
-    } else if (inputBitDepth == 32 && ctx->bitDepth == 16) {
-        ditherInt32ToInt16((uint8_t *)rawData, ctx->transferBuffer, totalSamples,
-                           &ctx->ditherState);
-    } else {
-        LOGE("WriteRaw: unsupported bit-depth conversion %d → %d", inputBitDepth, ctx->bitDepth);
-        env->ReleaseByteArrayElements(pcm, rawData, JNI_ABORT);
-        return;
-    }
-
-    env->ReleaseByteArrayElements(pcm, rawData, JNI_ABORT);
-
-    // Submit to USB pipeline
-    applySoftGain(ctx, ctx->transferBuffer, outputBytes);
-    submitPcmToUrbs(ctx, ctx->transferBuffer, outputBytes);
-
-    ctx->framesWritten += totalFrames;
-    if (ctx->framesWritten % ctx->sampleRate < (int64_t)totalFrames) {
-        LOGI("WriteRaw: %lld frames (~%.0f sec) inflight=%d inputBits=%d fpmf=%.4f fb#%lld",
-             (long long)ctx->framesWritten, (double)ctx->framesWritten/ctx->sampleRate,
-             ctx->urbsInFlight, inputBitDepth, ctx->calibratedFpmf, (long long)g_feedbackCount);
-    }
+    const int bytes = env->GetArrayLength(pcm);
+    jbyte *data = env->GetByteArrayElements(pcm, nullptr);
+    if (!data) return;
+    submitRawPcm(ctx, reinterpret_cast<uint8_t *>(data), bytes, inputBitDepth);
+    env->ReleaseByteArrayElements(pcm, data, JNI_ABORT);
 }
 
 } // extern "C"

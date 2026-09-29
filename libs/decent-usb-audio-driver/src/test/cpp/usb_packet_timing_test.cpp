@@ -48,7 +48,7 @@ static void checkStream(int rate, int busFrames, int interval, int bits,
                         int feedbackLength = 4) {
     const auto handle = Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioCreate(
             nullptr, nullptr, -1, 1, 0x02, 0, rate, 2, bits, maxPacket,
-            busFrames, feedbackLength, 0, interval);
+            busFrames, feedbackLength, 0, interval, 0);
     assert(handle);
     auto *ctx = reinterpret_cast<UsbAudioContext *>(handle);
     assert(ctx->serviceInterval == (1 << (interval - 1)));

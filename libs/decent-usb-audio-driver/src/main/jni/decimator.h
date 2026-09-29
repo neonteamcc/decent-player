@@ -9,8 +9,8 @@
  * the standard polyphase-free construction: deterministic, linear-phase,
  * no asynchronous SRC.
  *
- * Samples are canonical full-scale int32 (interleaved frames); filtering
- * runs in double precision, output saturates back to int32. State persists
+ * Samples are interleaved canonical int32 or normalized float frames.
+ * Filtering runs in double precision; only int32 output saturates. State persists
  * across process() calls for gapless streaming; reset() clears it on
  * seek/flush.
  *
@@ -45,6 +45,15 @@ void decimatorReset(Decimator *d);
  * @return Output frame count (≈ inFrames / factor, ±1 from phase carry).
  */
 int decimatorProcess(Decimator *d, const int32_t *in, int inFrames, int32_t *out);
+
+/**
+ * Process interleaved float frames (1.0 is full scale). Values outside
+ * [-1, 1] remain unclipped through filtering and output. Allocate at least
+ * decimatorMaxOutFrames(d, inFrames) × channels float samples for out.
+ * Shares history, phase, frame counts and reset semantics with the int32 API;
+ * callers may alternate entry points without resetting the filter.
+ */
+int decimatorProcessFloat(Decimator *d, const float *in, int inFrames, float *out);
 
 /** Upper bound of output frames for a given input frame count. */
 int decimatorMaxOutFrames(const Decimator *d, int inFrames);

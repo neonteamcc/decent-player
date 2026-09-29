@@ -25,6 +25,7 @@ add_subdirectory("${FLAC_MODULE_DIR}/libflac"
 # ── Main library: USB audio driver + native audio engine ──
 add_library(decent_usb_audio SHARED
     usb-audio-output.cpp
+    usb-float-processing.cpp
     native-audio-engine.cpp
     decimator.cpp
     resampler.cpp

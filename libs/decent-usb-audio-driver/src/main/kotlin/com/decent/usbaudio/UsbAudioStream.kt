@@ -64,7 +64,9 @@ class UsbAudioStream(
         packetsPerSecond: Int = 8000,
         feedbackMaxPacket: Int = 0,
         inputSampleRate: Int = 0,
-        dataInterval: Int = 1
+        dataInterval: Int = 1,
+        wireFormat: com.decent.usbaudio.descriptor.UsbSampleFormat = com.decent.usbaudio.descriptor.UsbSampleFormat.PCM,
+        validBitDepth: Int = bitDepth,
 ) {
 
     /** Native UsbAudioContext pointer. Exposed for NativeAudioEngine which
@@ -76,7 +78,7 @@ class UsbAudioStream(
         nativeHandle = nativeUsbAudioCreate(
                 fd, interfaceId, endpointOut, endpointFeedback,
                 sampleRate, channelCount, bitDepth, maxPacketSize,
-                packetsPerSecond, feedbackMaxPacket, inputSampleRate, dataInterval
+                packetsPerSecond, feedbackMaxPacket, inputSampleRate, dataInterval, wireFormat.nativeValue, validBitDepth
         )
         if (nativeHandle == 0L) {
             Log.e(TAG, "nativeUsbAudioCreate returned 0 — check logcat for native errors")
@@ -176,6 +178,12 @@ class UsbAudioStream(
      * [UsbAudioDevice.setHardwareVolumeFraction], which never touches
      * samples. 16-bit output is TPDF-dithered when scaling.
      */
+    @Synchronized
+    fun setLimiterEnabled(enabled: Boolean) {
+        if (nativeHandle != 0L) nativeSetLimiterEnabled(nativeHandle, enabled)
+    }
+
+    @Synchronized
     fun setGain(linear: Float) {
         if (nativeHandle == 0L) return
         nativeSetGain(nativeHandle, linear)
@@ -217,6 +225,7 @@ class UsbAudioStream(
     /**
      * Release all native resources. The instance must not be used after this.
      */
+    @Synchronized
     fun release() {
         if (nativeHandle == 0L) return
         nativeUsbAudioDestroy(nativeHandle)
@@ -229,7 +238,7 @@ class UsbAudioStream(
     private external fun nativeUsbAudioCreate(
             fd: Int, interfaceId: Int, endpointOut: Int, endpointFeedback: Int,
             sampleRate: Int, channelCount: Int, bitDepth: Int, maxPacketSize: Int,
-            packetsPerSecond: Int, feedbackMaxPacket: Int, inputSampleRate: Int, dataInterval: Int
+            packetsPerSecond: Int, feedbackMaxPacket: Int, inputSampleRate: Int, dataInterval: Int, wireFormat: Int, validBitDepth: Int
     ): Long
 
     private external fun nativeUsbAudioSetAltSetting(handle: Long, altSetting: Int): Boolean
@@ -237,6 +246,7 @@ class UsbAudioStream(
     private external fun nativeUsbAudioStart(handle: Long): Boolean
     private external fun nativeUsbAudioWrite(handle: Long, pcmBuffer: FloatArray)
     private external fun nativeUsbAudioWriteRaw(handle: Long, pcmBuffer: ByteArray, inputBitDepth: Int)
+    private external fun nativeSetLimiterEnabled(handle: Long, enabled: Boolean)
     private external fun nativeSetGain(handle: Long, gain: Float)
     private external fun nativeUsbAudioStop(handle: Long)
     private external fun nativeFinish(handle: Long): Boolean

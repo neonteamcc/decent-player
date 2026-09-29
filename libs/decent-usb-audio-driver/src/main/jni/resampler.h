@@ -12,7 +12,7 @@
  * interpolate-by-L / decimate-by-M. Passband is flat to ~0.907 of the
  * narrower Nyquist (20 kHz for 44.1↔48 conversions); everything that
  * could alias lands below the 16-bit noise floor. Filtering runs in
- * double precision over canonical full-scale int32 frames; state
+ * double precision over int32 or normalized float frames; state
  * persists across process() calls, reset() clears it on seek/flush.
  *
  * Pure C++ (no JNI/Android) so the filter is host-testable.
@@ -44,5 +44,14 @@ int resamplerMaxOutFrames(const RationalResampler *r, int inFrames);
  * @return Output frame count.
  */
 int resamplerProcess(RationalResampler *r, const int32_t *in, int inFrames, int32_t *out);
+
+/**
+ * Process interleaved float frames (1.0 is full scale). Values outside
+ * [-1, 1] remain unclipped through filtering and output. Allocate at least
+ * resamplerMaxOutFrames(r, inFrames) × channels float samples for out.
+ * Shares history, phase, frame counts and reset semantics with the int32 API;
+ * callers may alternate entry points without resetting the filter.
+ */
+int resamplerProcessFloat(RationalResampler *r, const float *in, int inFrames, float *out);
 
 void resamplerDestroy(RationalResampler *r);

@@ -28,6 +28,11 @@ enum class UacVersion {
     UNKNOWN,
 }
 
+/** Encoding on the USB wire, distinct from sample slot width. */
+enum class UsbSampleFormat(val nativeValue: Int) {
+    PCM(0), IEEE_FLOAT(1), UNSUPPORTED(-1),
+}
+
 /**
  * Isochronous synchronization type from the data endpoint's bmAttributes
  * bits 3:2 (USB 2.0 Table 9-13). Identical encoding in UAC1 and UAC2.
@@ -143,7 +148,18 @@ data class StreamingAltSetting(
          * the device wants only wMaxPacketSize-sized packets (ALSA fill_max).
          */
         val maxPacketsOnly: Boolean,
+
+        /** Type-I PCM or IEEE_FLOAT; compressed/raw/unknown alts are not PCM. */
+        val sampleFormat: UsbSampleFormat = UsbSampleFormat.PCM,
 ) {
+    val isSupported: Boolean
+        get() = when (sampleFormat) {
+            UsbSampleFormat.IEEE_FLOAT -> subslotSize == 4 && bitResolution == 32
+            UsbSampleFormat.PCM -> subslotSize in 2..4 && bitResolution in 16..32 &&
+                    bitResolution <= subslotSize * 8
+            UsbSampleFormat.UNSUPPORTED -> false
+        }
+
     /** Bytes per audio frame (one sample slot per channel). */
     val bytesPerFrame: Int
         get() = subslotSize * channels
@@ -211,6 +227,15 @@ data class UsbAudioDeviceLayout(
         /** Playback-path Feature Unit volume capability, or null. */
         val volume: VolumeControl? = null,
 ) {
+    /** Prefer float for DSP input and integer PCM for an untouched source.
+     * A float-only device still accepts integer sources after conversion. */
+    fun selectPlaybackAlt(interfaceId: Int, preferFloat: Boolean, channels: Int? = null): StreamingAltSetting? {
+        val supported = streamingAlts.filter { it.interfaceId == interfaceId && it.isSupported && (channels == null || it.channels == channels) }
+        val preferred = if (preferFloat) UsbSampleFormat.IEEE_FLOAT else UsbSampleFormat.PCM
+        return (supported.filter { it.sampleFormat == preferred }.ifEmpty { supported })
+            .maxByOrNull { it.bitResolution }
+    }
+
     /** True when at least one playback path exists. */
     val hasPlayback: Boolean
         get() = streamingAlts.isNotEmpty()

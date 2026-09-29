@@ -141,7 +141,22 @@ int resamplerMaxOutFrames(const RationalResampler *r, int inFrames) {
     return (int)(((int64_t)inFrames * r->L) / r->M) + 2;
 }
 
-int resamplerProcess(RationalResampler *r, const int32_t *in, int inFrames, int32_t *out) {
+// Keep both entry points in canonical full-scale units so calls can share history.
+static double canonicalSample(int32_t sample) { return (double)sample; }
+static double canonicalSample(float sample) { return (double)sample * 2147483648.0; }
+
+static void storeSample(double sample, int32_t *out) {
+    if (sample > 2147483647.0) sample = 2147483647.0;
+    if (sample < -2147483648.0) sample = -2147483648.0;
+    *out = (int32_t)llrint(sample);
+}
+
+static void storeSample(double sample, float *out) {
+    *out = (float)(sample / 2147483648.0);
+}
+
+template <typename Sample>
+static int process(RationalResampler *r, const Sample *in, int inFrames, Sample *out) {
     if (!r || inFrames <= 0) return 0;
     const int ch = r->channels;
     const int tpp = r->tapsPerPhase;
@@ -150,7 +165,7 @@ int resamplerProcess(RationalResampler *r, const int32_t *in, int inFrames, int3
     for (int f = 0; f < inFrames; f++) {
         // Push one frame into each channel's circular history.
         for (int c = 0; c < ch; c++) {
-            r->hist[(size_t)c * tpp + r->histPos] = (double)in[(size_t)f * ch + c];
+            r->hist[(size_t)c * tpp + r->histPos] = canonicalSample(in[(size_t)f * ch + c]);
         }
         const int newestPos = r->histPos;
         r->histPos = (r->histPos + 1) % tpp;
@@ -174,16 +189,21 @@ int resamplerProcess(RationalResampler *r, const int32_t *in, int inFrames, int3
                     acc += h[k] * hist[idx];
                     idx = (idx == 0) ? tpp - 1 : idx - 1;
                 }
-                double v = acc;
-                if (v > 2147483647.0) v = 2147483647.0;
-                if (v < -2147483648.0) v = -2147483648.0;
-                out[(size_t)outFrames * ch + c] = (int32_t)llrint(v);
+                storeSample(acc, out + (size_t)outFrames * ch + c);
             }
             outFrames++;
             r->outCount++;
         }
     }
     return outFrames;
+}
+
+int resamplerProcess(RationalResampler *r, const int32_t *in, int inFrames, int32_t *out) {
+    return process(r, in, inFrames, out);
+}
+
+int resamplerProcessFloat(RationalResampler *r, const float *in, int inFrames, float *out) {
+    return process(r, in, inFrames, out);
 }
 
 void resamplerDestroy(RationalResampler *r) {
