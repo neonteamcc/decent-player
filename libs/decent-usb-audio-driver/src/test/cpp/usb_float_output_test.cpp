@@ -1,12 +1,14 @@
-// Exercises production JNI dispatch, float processing and USB packetization.
-// Only Java array access, USB ioctl and Android logging are replaced.
-// Linux host build, from the repository root (requires a JDK and Linux headers):
-// c++ -std=c++11 -Wall -Werror -fsanitize=address,undefined \
-//   -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
-//   -Ilibs/decent-usb-audio-driver/src/test/cpp/stubs \
-//   libs/decent-usb-audio-driver/src/test/cpp/usb_float_output_test.cpp \
-//   libs/decent-usb-audio-driver/src/main/jni/{usb-float-processing,resampler,decimator}.cpp \
-//   -o /tmp/usb_float_output_test && /tmp/usb_float_output_test
+/*
+Exercises production JNI dispatch, float processing and USB packetization.
+Only Java array access, USB ioctl and Android logging are replaced.
+Linux host build, from the repository root (requires a JDK and Linux headers):
+c++ -std=c++11 -Wall -Werror -fsanitize=address,undefined \
+  -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
+  -Ilibs/decent-usb-audio-driver/src/test/cpp/stubs \
+  libs/decent-usb-audio-driver/src/test/cpp/usb_float_output_test.cpp \
+  libs/decent-usb-audio-driver/src/main/jni/{usb-float-processing,resampler,decimator}.cpp \
+  -o /tmp/usb_float_output_test && /tmp/usb_float_output_test
+*/
 #include <sys/ioctl.h>
 #include <algorithm>
 #include <cassert>
