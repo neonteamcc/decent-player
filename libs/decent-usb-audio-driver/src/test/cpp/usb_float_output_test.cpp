@@ -445,6 +445,42 @@ static void safeFloatPcm16() {
     }
 }
 
+static void valid16Slots() {
+    constexpr int frames = 4097;
+    for (int inputBits : {16, 24, 32}) {
+        std::vector<int32_t> samples(frames * 2);
+        uint32_t state = 1;
+        for (auto &sample : samples) { state = state * 1664525u + 1013904223u; sample = int32_t(state); }
+        auto pcm = words(samples, inputBits);
+        std::vector<uint8_t> packed;
+        uint32_t finalDither;
+        {
+            Stream stream(16, 0);
+            const auto initialDither = stream.ctx->ditherState;
+            stream.writeRaw(pcm, inputBits, frames);
+            packed = stream.finish(frames);
+            finalDither = stream.ctx->ditherState;
+            if (inputBits == 16) {
+                CHECK(packed == pcm);
+                CHECK(finalDither == initialDither);
+            } else CHECK(finalDither != initialDither);
+        }
+        for (int slotBits : {24, 32}) for (int chunk : {1, 13, 257}) {
+            Stream stream(slotBits, 0, 48000, 0, 16);
+            stream.writeRaw(pcm, inputBits, chunk);
+            auto out = stream.finish(frames);
+            CHECK(stream.ctx->ditherState == finalDither);
+            const int paddingBits = slotBits - 16;
+            const uint32_t paddingMask = (uint32_t(1) << paddingBits) - 1;
+            for (size_t i = 0; i < samples.size(); ++i) {
+                const uint32_t actual = wordAt(out, i * (slotBits / 8), slotBits / 8);
+                CHECK((actual & paddingMask) == 0);
+                CHECK(actual == (wordAt(packed, i * 2, 2) << paddingBits));
+            }
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     struct Test { const char *name; void (*run)(); };
     const Test tests[] = {{"identity", identity}, {"gain", gainBeforeClamp},
@@ -453,7 +489,8 @@ int main(int argc, char **argv) {
         {"limiter-recovery", limiterRecovery}, {"limiter-reset", limiterReset},
         {"limiter-raw-recovery", limiterRawRecovery}, {"limiter-toggle", limiterToggle},
         {"valid24", valid24}, {"gain-dither", gainDither},
-        {"src-dither", srcDither}, {"safe-float-pcm16", safeFloatPcm16}};
+        {"src-dither", srcDither}, {"safe-float-pcm16", safeFloatPcm16},
+        {"valid16-slots", valid16Slots}};
     int count = 0;
     try {
         for (const auto &test : tests) if (argc == 1 || test.name == std::string(argv[1])) {

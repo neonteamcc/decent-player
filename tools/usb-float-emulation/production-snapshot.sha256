@@ -1,6 +1,6 @@
 c8f64c22f23261f4652822b862e0839a8b0c528c607814118a50417d0b3f15ee  libs/decent-usb-audio-driver/src/main/jni/usb-audio-output.cpp
 e611f6a819642d715d945a8b03014b3aadcfc877e307a7efbef817c3f0df066f  libs/decent-usb-audio-driver/src/main/jni/usb-audio-output.h
-b54d5ca65592428765ce27307ac63e962b358993bfa579961bf234b60d4f25f3  libs/decent-usb-audio-driver/src/main/jni/usb-float-processing.cpp
+84d3b1abc76b981f5b3d479b643ba11364378a5d32ae1154a7cadf69f2e4fd88  libs/decent-usb-audio-driver/src/main/jni/usb-float-processing.cpp
 29ad70e5b78f3aeb28ffac718f0bbe00a5b0d78c9001344af3e9418ebaa00525  libs/decent-usb-audio-driver/src/main/jni/peak-limiter.h
 84e35d47baa1554cfb2d8749b011ee424c37faf845c861b8066e6d2efa55894a  libs/decent-usb-audio-driver/src/main/jni/decimator.cpp
 09250d9532851f5c84506351b520042bfb6e4286f9225879b40e5553d4ad273b  libs/decent-usb-audio-driver/src/main/jni/decimator.h

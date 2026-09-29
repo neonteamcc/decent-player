@@ -68,6 +68,7 @@ jobs:
             "/tmp/${test}_test"
           done
           g++ -std=c++11 -Wall -Werror -fsanitize=address,undefined \
+            -Ilibs/decent-usb-audio-driver/src/main/jni \
             libs/decent-usb-audio-driver/src/test/cpp/float_resampling_test.cpp \
             libs/decent-usb-audio-driver/src/main/jni/decimator.cpp \
             libs/decent-usb-audio-driver/src/main/jni/resampler.cpp \

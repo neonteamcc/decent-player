@@ -135,11 +135,21 @@ void submitRawPcm(UsbAudioContext *ctx, const uint8_t *pcm, int bytes, int input
     if (count > INT32_MAX / ctx->bytesPerSample) { ctx->running.store(false); return; }
     const int outBytes = count * ctx->bytesPerSample;
     if (!outputMemory(ctx, &ctx->transferBuffer, &ctx->transferBufferCapacity, outBytes)) return;
-    if (inputBits == ctx->bitDepth) std::memcpy(ctx->transferBuffer, pcm, bytes);
-    else if (inputBits == 24 && ctx->bitDepth == 16)
-        ditherInt24ToInt16(pcm, ctx->transferBuffer, count, &ctx->ditherState);
-    else if (inputBits == 32 && ctx->bitDepth == 16)
-        ditherInt32ToInt16(pcm, ctx->transferBuffer, count, &ctx->ditherState);
+    if (ctx->validBitDepth == 16 && inputBits > 16) {
+        if (!outputMemory(ctx, &ctx->canonicalBuffer, &ctx->canonicalCapacity, count * 2)) return;
+        if (inputBits == 24)
+            ditherInt24ToInt16(pcm, ctx->canonicalBuffer, count, &ctx->ditherState);
+        else
+            ditherInt32ToInt16(pcm, ctx->canonicalBuffer, count, &ctx->ditherState);
+        for (int i = 0; i < count; ++i) {
+            uint32_t value = uint32_t(ctx->canonicalBuffer[i * 2]) |
+                    (uint32_t(ctx->canonicalBuffer[i * 2 + 1]) << 8);
+            value <<= ctx->bitDepth - 16;
+            for (int b = 0; b < ctx->bytesPerSample; ++b)
+                ctx->transferBuffer[i * ctx->bytesPerSample + b] = uint8_t(value >> (8 * b));
+        }
+    }
+    else if (inputBits == ctx->bitDepth) std::memcpy(ctx->transferBuffer, pcm, bytes);
     else if (inputBits == 32 && ctx->bitDepth == 24)
         packInt32ToInt24(pcm, ctx->transferBuffer, count);
     else {

@@ -5,11 +5,11 @@ Android NDK 29.0.14206865 static guest executable, and an immutable copy of the
 production sources listed in `production-snapshot.sha256`.
 
 Production source manifest SHA256:
-`1491de6cf7103f416c1bc66a46a927c61fd765138864029fed568499715060a5`
+`da8319eeeea064982c133beb57513f203e81e2d005eb7dd1e58495db694ec491`
 
 Command: the `build-harness.sh` -> `make-initramfs.py` -> `run.sh` sequence in
 README.md. Build, guest and capture checker exited 0. The final guest plus capture
-checker invocation took 9.786 seconds wall time (measured with Python
+checker invocation took 9.465 seconds wall time (measured with Python
 `time.monotonic`; compilation and initramfs assembly excluded). Each stream used
 chunks of 1/7/13/257/509 frames and 200 ms + 37 frames total.
 
@@ -35,7 +35,10 @@ The checker also rejected a copy of that capture with one flipped PCM payload
 bit (`byte mismatch alt=1 rate=44100`). This is a negative control for the oracle.
 
 The final source snapshot includes the completed JNI integration, valid-bit
-handling, default-off limiter and PCM16 dither corrections. The guest invokes
+handling, default-off limiter and PCM16 dither corrections, including TPDF for
+raw PCM24/32 converted to 16 valid bits in a 32-bit slot. That raw-input branch
+is covered by separate native tests reported by the lead; this VM test exercises
+float submission. The guest invokes
 the production `submitFloatPcm` helper directly. JVM array access and JNI write
 dispatch remain outside this VM test's boundary; separate host JNI tests are
 owned and reported by the lead. Do not use these source hashes as evidence for
