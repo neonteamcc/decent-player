@@ -12,6 +12,8 @@ class UsbStreamingThread internal constructor(private val output: Output) {
         fun writeRaw(data: ByteArray, encoding: Int)
         fun finish(): Boolean
         fun flush()
+        /** [UsbAudioStream.stopErrno]: why the driver stopped sending, or 0. */
+        fun stopErrno(): Int = 0
     }
 
     constructor(stream: UsbAudioStream) : this(object : Output {
@@ -19,7 +21,17 @@ class UsbStreamingThread internal constructor(private val output: Output) {
         override fun writeRaw(data: ByteArray, encoding: Int) = stream.writeRaw(data, encoding)
         override fun finish() = stream.finish()
         override fun flush() = stream.flush()
+        override fun stopErrno() = stream.stopErrno
     })
+
+    /**
+     * The driver stopped sending audio to the DAC on its own: every write
+     * since is dropped, so the DAC is certainly silent. Raised as soon as the
+     * write that met it returns, instead of the track playing on in silence
+     * until its end-of-stream drain failed.
+     */
+    class UsbStreamStoppedException(val errno: Int) :
+        IllegalStateException("USB stream stopped by the driver (errno=$errno)")
 
     private sealed class Command(val generation: Long) {
         class FloatBuffer(val data: FloatArray, generation: Long) : Command(generation)
@@ -55,10 +67,16 @@ class UsbStreamingThread internal constructor(private val output: Output) {
                     }
                     synchronized(ioLock) {
                         if (synchronized(stateLock) { command.generation == generation }) when (command) {
-                            is Command.FloatBuffer -> output.write(command.data)
-                            is Command.RawBuffer -> output.writeRaw(command.data, command.encoding)
+                            is Command.FloatBuffer -> { output.write(command.data); throwIfDriverStopped() }
+                            is Command.RawBuffer -> { output.writeRaw(command.data, command.encoding); throwIfDriverStopped() }
                             is Command.End -> {
-                                check(output.finish()) { "USB end-of-stream drain failed" }
+                                // A device that is going away has nothing left
+                                // to drain, and its host is already rebuilding
+                                // the output; failing here put an error on the
+                                // screen for an unplug at the end of a track.
+                                check(output.finish() || deviceGone(output.stopErrno())) {
+                                    "USB end-of-stream drain failed"
+                                }
                                 synchronized(stateLock) {
                                     if (command.generation == generation) endDrained = true
                                 }
@@ -86,6 +104,20 @@ class UsbStreamingThread internal constructor(private val output: Output) {
             start()
         }
     }
+
+    /**
+     * Surface a driver that gave up — except for a device that is going
+     * away: an unplug is the host's to handle (it rebuilds the output on the
+     * detach), and reporting it as a failure would put an error on the screen
+     * for every cable pulled mid-track.
+     */
+    private fun throwIfDriverStopped() {
+        val errno = output.stopErrno()
+        if (errno != 0 && !deviceGone(errno)) throw UsbStreamStoppedException(errno)
+    }
+
+    private fun deviceGone(errno: Int) =
+        errno == UsbAudioStream.ENODEV || errno == UsbAudioStream.ESHUTDOWN
 
     fun enqueue(data: FloatArray): Boolean = synchronized(stateLock) {
         enqueueLocked(Command.FloatBuffer(data, generation))

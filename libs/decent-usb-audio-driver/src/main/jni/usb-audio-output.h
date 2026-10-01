@@ -163,6 +163,16 @@ struct UsbAudioContext {
 
     std::atomic<bool> running;
 
+    /**
+     * Why the stream stopped ITSELF, as an errno; 0 while it has not. Set
+     * only where the driver gives up on the device mid-stream (a failed
+     * submit, a failed reap, a reap that timed out), never by a deliberate
+     * stop, and the first cause wins. Once set, every later write is dropped,
+     * so this is the fact "the DAC is receiving nothing" — exposed so the
+     * host can say so instead of playing on in silence.
+     */
+    std::atomic<int> stopErrno{0};
+
     /** Scratch buffer for PCM format conversion (float -> int16/24/32). */
     uint8_t *transferBuffer;
     int32_t transferBufferCapacity;

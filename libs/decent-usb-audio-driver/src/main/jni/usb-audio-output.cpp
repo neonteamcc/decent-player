@@ -230,6 +230,17 @@ static void handleFeedbackCompletion(UsbAudioContext *ctx) {
 // ── ISO URB submission / reap ───────────────────────────────────────
 
 /**
+ * Record why the stream stopped itself (see UsbAudioContext::stopErrno).
+ * Only while it is running: a reap failing inside a deliberate teardown is
+ * not the device giving up.
+ */
+static void markStopped(UsbAudioContext *ctx, int err) {
+    if (!ctx->running.load()) return;
+    int none = 0;
+    ctx->stopErrno.compare_exchange_strong(none, err != 0 ? err : EIO);
+}
+
+/**
  * Submit the URB at ring[submitIdx] with the given packet layout.
  * @param numPackets  Actual number of packets (no zero-length padding)
  * Returns 0 on success, -1 on error.
@@ -256,8 +267,10 @@ static int submitRingUrb(UsbAudioContext *ctx, const int *pktSizes, int numPacke
 
     int ret = ioctl(ctx->fd, USBDEVFS_SUBMITURB, u);
     if (ret < 0) {
+        const int err = errno;  // before logging can clobber it
         LOGE("SUBMITURB FAILED slot=%d ep=0x%02x bytes=%d pkts=%d errno=%d (%s)",
-             ctx->submitIdx, ctx->endpointOut, totalBytes, numPackets, errno, strerror(errno));
+             ctx->submitIdx, ctx->endpointOut, totalBytes, numPackets, err, strerror(err));
+        markStopped(ctx, err);
         return -1;
     }
 
@@ -300,7 +313,9 @@ static int reapOldestUrb(UsbAudioContext *ctx, int timeoutMs) {
             return 0;
         }
         if (ret < 0 && errno != EAGAIN) {
-            LOGE("reapOldestUrb: error errno=%d (%s)", errno, strerror(errno));
+            const int err = errno;
+            LOGE("reapOldestUrb: error errno=%d (%s)", err, strerror(err));
+            markStopped(ctx, err);
             return -1;
         }
         usleep(125);  // 125µs = 1 USB microframe
@@ -582,6 +597,7 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioStart(
              ctx->urbsInFlight, ctx->feedbackInFlight ? 1 : 0);
         drainAllUrbs(ctx);
     }
+    ctx->stopErrno.store(0);
     ctx->running.store(true);
     ctx->framesWritten = 0;
     ctx->limiter.reset();
@@ -677,8 +693,11 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeFinish(JNIEnv *, jobject, jlong h)
     int offset = 0;
     const int tailBytes = ctx->residualBytes;
     while (offset < tailBytes) {
-        if (ctx->urbsInFlight >= ctx->numUrbs && reapOldestUrb(ctx, 500) < 0)
-            return JNI_FALSE;
+        if (ctx->urbsInFlight >= ctx->numUrbs) {
+            const int reaped = reapOldestUrb(ctx, 500);
+            if (reaped == -2) markStopped(ctx, ETIMEDOUT);
+            if (reaped < 0) return JNI_FALSE;
+        }
         auto *slot = &ctx->ring[ctx->submitIdx];
         int sizes[USB_AUDIO_PACKETS_PER_URB];
         int packets = 0, bytes = 0;
@@ -704,7 +723,10 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeFinish(JNIEnv *, jobject, jlong h)
     ctx->residualBytes = 0;
     const int pending = ctx->urbsInFlight;
     while (ctx->urbsInFlight > 0) {
-        if (!ctx->running.load() || reapOldestUrb(ctx, 500) < 0) return JNI_FALSE;
+        if (!ctx->running.load()) return JNI_FALSE;
+        const int reaped = reapOldestUrb(ctx, 500);
+        if (reaped == -2) markStopped(ctx, ETIMEDOUT);
+        if (reaped < 0) return JNI_FALSE;
     }
     LOGI("Finish: played tail=%d bytes and drained %d audio URBs", tailBytes, pending);
     return JNI_TRUE;
@@ -742,6 +764,13 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeUsbAudioDestroy(
     free(ctx->decimatedBuffer);
     LOGI("Destroy: %lld frames total", (long long)ctx->framesWritten);
     delete ctx;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_decent_usbaudio_UsbAudioStream_nativeStopErrno(
+        JNIEnv *, jobject, jlong h) {
+    auto *ctx = reinterpret_cast<UsbAudioContext *>(h);
+    return ctx ? ctx->stopErrno.load() : 0;
 }
 
 JNIEXPORT jboolean JNICALL
@@ -1089,6 +1118,7 @@ void submitPcmToUrbs(UsbAudioContext *ctx, const uint8_t *pcmData, int totalByte
             int result = reapOldestUrb(ctx, 200);
             if (result == -2) {
                 LOGE("submitPcmToUrbs: reap timeout, inflight=%d", ctx->urbsInFlight);
+                markStopped(ctx, ETIMEDOUT);  // before the drain's own reaps
                 drainAllUrbs(ctx);
                 ctx->running.store(false);
                 free(mergedBuf);

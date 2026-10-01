@@ -6,6 +6,9 @@ import java.util.concurrent.TimeUnit
 import org.junit.Assert.*
 import org.junit.Test
 
+private const val UsbAudioStream_ENODEV = com.decent.usbaudio.UsbAudioStream.ENODEV
+private const val UsbAudioStream_ESHUTDOWN = com.decent.usbaudio.UsbAudioStream.ESHUTDOWN
+
 class UsbStreamingThreadTest {
     private class Output : UsbStreamingThread.Output {
         val writes = Collections.synchronizedList(mutableListOf<Int>())
@@ -113,6 +116,66 @@ class UsbStreamingThreadTest {
         } finally {
             out.allowFinish.countDown(); flushThread?.join(5000); worker.stop()
         }
+    }
+
+    /** A driver that gives up after its first write: what [UsbAudioStream]
+     *  reports once a submit or reap failed. [finish] fails the way the native
+     *  drain does on a stopped stream. */
+    private class StoppingOutput(private val errno: Int) : UsbStreamingThread.Output {
+        val writes = Collections.synchronizedList(mutableListOf<Int>())
+        @Volatile private var stopped = 0
+        override fun write(data: FloatArray) = writeRaw(byteArrayOf(data[0].toInt().toByte()), 2)
+        override fun writeRaw(data: ByteArray, encoding: Int) {
+            if (stopped == 0) writes.add(data[0].toInt())
+            stopped = errno
+        }
+        override fun finish() = stopped == 0
+        override fun flush() = Unit
+        override fun stopErrno() = stopped
+    }
+
+    @Test fun aDriverThatGivesUpIsReportedAtOnceNotAtTheEndOfTheTrack() {
+        val out = StoppingOutput(errno = 71) // EPROTO: the device is there and refusing
+        val worker = UsbStreamingThread(out)
+        try {
+            worker.start()
+            assertTrue(worker.enqueueRaw(byteArrayOf(1), 2))
+            await { worker.failure != null }
+            val failure = worker.failure as UsbStreamingThread.UsbStreamStoppedException
+            assertEquals(71, failure.errno)
+            assertFalse("no end-of-stream was needed to find out", worker.isEnded())
+        } finally { worker.stop() }
+    }
+
+    @Test fun anUnpluggedDacIsNotAFailureItIsTheHostsToRebuild() {
+        for (gone in listOf(UsbAudioStream_ENODEV, UsbAudioStream_ESHUTDOWN)) {
+            val out = StoppingOutput(errno = gone)
+            val worker = UsbStreamingThread(out)
+            try {
+                worker.start()
+                assertTrue(worker.enqueueRaw(byteArrayOf(1), 2))
+                assertTrue(worker.enqueueRaw(byteArrayOf(2), 2))
+                worker.finish()
+                // Even the end-of-track drain, which used to throw on a stopped
+                // stream: an unplug at the end of a track is still an unplug.
+                await { worker.isEnded() }
+                assertNull("errno $gone", worker.failure)
+            } finally { worker.stop() }
+        }
+    }
+
+    @Test fun aDrainThatFailsForNoStatedReasonStillFails() {
+        val out = Output()
+        out.allowWrite.countDown()
+        val worker = UsbStreamingThread(object : UsbStreamingThread.Output by out {
+            override fun finish() = false
+        })
+        try {
+            worker.start()
+            worker.enqueueRaw(byteArrayOf(1), 2); worker.finish()
+            await { worker.failure != null }
+            assertFalse(worker.failure is UsbStreamingThread.UsbStreamStoppedException)
+        } finally { worker.stop() }
     }
 
     private fun await(predicate: () -> Boolean) {

@@ -93,6 +93,17 @@ class UsbAudioStream(
     val isAlive: Boolean
         get() = nativeHandle != 0L && nativeIsRunning(nativeHandle)
 
+    /**
+     * Why the stream stopped ITSELF since the last start(), as an errno, or 0
+     * when it has not. Non-zero means the driver gave up on the device
+     * mid-stream (a failed submit or reap, or a reap timeout) and every write
+     * since has been dropped: the DAC is receiving nothing. A deliberate
+     * stop() never sets it. [ENODEV] / [ESHUTDOWN] mean the device itself is
+     * going away (unplugged).
+     */
+    val stopErrno: Int
+        get() = if (nativeHandle == 0L) 0 else nativeStopErrno(nativeHandle)
+
     /** Total frames written to USB since last start(). Used for position tracking. */
     val framesWritten: Long
         get() = if (nativeHandle != 0L) nativeGetFramesWritten(nativeHandle) else 0L
@@ -254,10 +265,19 @@ class UsbAudioStream(
     private external fun nativeDrainUrbs(handle: Long): Int
     private external fun nativeUsbAudioDestroy(handle: Long)
     private external fun nativeIsRunning(handle: Long): Boolean
+    private external fun nativeStopErrno(handle: Long): Int
     private external fun nativeGetFramesWritten(handle: Long): Long
 
     companion object {
         private const val TAG = "UsbAudioStream"
+
+        /** [stopErrno] values meaning the device is going away rather than
+         *  failing: usbdevfs answers ENODEV once it is disconnected, and a
+         *  submit racing the disconnect meets ESHUTDOWN from its disabled
+         *  endpoint. Linux errno values — the same on every Android ABI.
+         *  `const`, so reading them never loads the native library. */
+        const val ENODEV = 19
+        const val ESHUTDOWN = 108
 
         init {
             System.loadLibrary("decent_usb_audio")
