@@ -599,6 +599,67 @@ class UsbAudioDescriptorParserTest {
         assertFalse(alt.hasSampleRateControl)
     }
 
+    // FreeDSP (35d8:1496): captured UAC2 playback + mono capture + HID.
+    // Playback uses clock #9 / interface 1; capture has clock #10 / interface 2.
+    private val freeDsp = hex(
+            "12 01 00 02 EF 02 01 40 D8 35 96 14 06 00 01 02 00 01 09 02 A6 01 04 01 04 A0 32 08 0B 00 03 01",
+            "00 20 00 09 04 00 00 00 01 01 20 00 09 24 01 00 02 04 73 00 00 08 24 0A 09 03 07 00 00 11 24 02",
+            "01 01 01 00 09 02 03 00 00 00 00 00 00 00 12 24 06 02 01 03 00 00 00 0C 00 00 00 0C 00 00 00 04",
+            "0C 24 03 03 02 04 04 02 09 00 00 00 08 24 0A 0A 03 07 00 00 0C 24 03 06 01 01 00 05 0A 00 00 00",
+            "0E 24 06 05 04 03 00 00 00 0C 00 00 00 06 11 24 02 04 01 02 03 0A 01 01 00 00 00 00 00 00 00 09",
+            "04 01 00 00 01 02 20 00 09 04 01 01 01 01 02 20 00 10 24 01 01 00 01 01 00 00 00 02 03 00 00 00",
+            "00 06 24 02 01 02 10 07 05 01 0D C0 00 01 08 25 01 00 00 02 02 00 09 04 01 02 01 01 02 20 00 10",
+            "24 01 01 00 01 01 00 00 00 02 03 00 00 00 00 06 24 02 01 03 18 07 05 01 0D 20 01 01 08 25 01 00",
+            "00 02 02 00 09 04 01 03 01 01 02 20 00 10 24 01 01 00 01 01 00 00 00 02 03 00 00 00 00 06 24 02",
+            "01 04 20 07 05 01 0D 80 01 01 08 25 01 00 00 02 02 00 09 04 02 00 00 01 02 20 00 09 04 02 01 01",
+            "01 02 20 00 10 24 01 06 00 01 01 00 00 00 01 01 00 00 00 00 06 24 02 01 02 10 07 05 81 0D 0C 00",
+            "01 08 25 01 00 00 02 02 00 09 04 02 02 01 01 02 20 00 10 24 01 06 05 01 01 00 00 00 01 01 00 00",
+            "00 00 06 24 02 01 03 18 07 05 81 0D 12 00 01 08 25 01 00 00 02 02 00 08 0B 03 01 03 00 00 00 09",
+            "04 03 00 01 03 00 00 00 09 21 11 01 00 01 22 3F 00 07 05 83 03 40 00 07",
+    )
+
+    @Test
+    fun freeDsp_playbackStaysSeparateFromCapture() {
+        assertEquals(440, freeDsp.size)
+        val layout = UsbAudioDescriptorParser.parse(freeDsp)!!
+        assertEquals(UacVersion.UAC2, layout.uacVersion)
+        assertEquals(0, layout.controlInterfaceId)
+        assertEquals(9, layout.clockSourceId)
+        assertEquals(0x0900, UacControl.uac2SetSampleRate(
+                layout.clockSourceId, layout.controlInterfaceId, 44100).index)
+        assertEquals(listOf(1, 2, 3), layout.streamingAlts.map { it.altSetting })
+        assertEquals(listOf(16, 24, 32), layout.streamingAlts.map { it.bitResolution })
+        assertEquals(listOf(2, 3, 4), layout.streamingAlts.map { it.subslotSize })
+        assertEquals(listOf(192, 288, 384), layout.streamingAlts.map { it.maxPacketSize })
+        for (alt in layout.streamingAlts) {
+            assertEquals(1, alt.interfaceId)
+            assertEquals(2, alt.channels)
+            assertEquals(0x01, alt.endpointAddress)
+            assertEquals(1, alt.interval)
+            assertEquals(UsbSampleFormat.PCM, alt.sampleFormat)
+            assertEquals(UsbSyncType.SYNC, alt.syncType)
+            assertFalse(alt.syncType.needsFeedback)
+            assertNull(alt.feedback)
+            assertTrue(alt.sampleRates.isEmpty()) // UAC2 rates require a clock query.
+        }
+        assertNull(layout.selectPlaybackAlt(2, false, 1)) // capture is not playback
+        // HIGH came from GET_SPEED; these descriptors alone do not prove it.
+        assertFalse(UsbAudioDescriptorParser.definitelyHighSpeed(freeDsp))
+    }
+
+    @Test
+    fun freeDsp_selected32BitAltKeepsIts384BytePacketBudget() {
+        val layout = UsbAudioDescriptorParser.parse(freeDsp)!!
+        for (preferFloat in listOf(false, true)) {
+            val selected = layout.selectPlaybackAlt(1, preferFloat, 2)!!
+            assertEquals(3, selected.altSetting)
+            assertEquals(32, selected.bitResolution)
+            assertEquals(4, selected.subslotSize)
+            assertEquals(384, selected.maxPacketSize)
+            assertEquals(UsbSampleFormat.PCM, selected.sampleFormat) // no float alt
+        }
+    }
+
     @Test
     fun garbageInput_returnsNullOrEmpty() {
         assertNull(UsbAudioDescriptorParser.parse(ByteArray(0)))
