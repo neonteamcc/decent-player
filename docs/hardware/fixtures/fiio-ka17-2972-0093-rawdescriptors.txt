@@ -3,6 +3,11 @@ on macOS (device + configuration 0; configuration 1 is byte-identical).
 High-speed UAC2, async feedback, FU#10 master Mute+Volume, alt3 = DSD
 (AS_GENERAL bmFormats 0x80000000 RAW_DATA).
 
+FU#10 volume RANGE (UAC2 GET RANGE on macOS, 2026-10-09, firmware 2.25,
+master and both channels alike): -100.0 .. 0.0 dB, resolution 1.0 dB.
+With the unit's EQ on it answers -127.0 .. 0.0 dB instead (see
+fiio-ka17-eq-…). Runtime answers, not part of these bytes.
+
 DEVICE+CONFIG0:
 12 01 00 02 EF 02 01 40 72 29 93 00 25 02 01 03 02 02 09 02 55 01 05 01
 00 80 00 08 0B 00 02 01 00 20 00 09 04 00 00 00 01 01 20 03 09 24 01 00
