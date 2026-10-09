@@ -23,7 +23,8 @@ screen shows the switch).
 
 FU#10 volume in this mode (UAC1 GET_MIN/MAX/RES/CUR on macOS, EQ off):
 -127.0 .. 0.0 dB, resolution 1.0 dB, on channels 1 and 2 — and on the
-master channel too, although bmaControls(0) declares no controls. UAC2
+master channel too, although bmaControls(0) declares no controls. The
+same with the EQ on. UAC2
 with the EQ off answers -100.0 .. 0.0 dB instead (fiio-ka17-…). Runtime
 answers, not part of these bytes.
 
