@@ -10,9 +10,10 @@ and 2 only (bControlSize 1). One streaming alt: 16-bit stereo, discrete
 data EP 0x01 with wMaxPacketSize 388 and bSynchAddress 0x81, 3-byte
 feedback EP 0x81 with bRefresh 4. Interfaces 0, 1 and 3 (HID); no 2.
 
-Bus speed is not in the dump and was not readable over adb. The packet
-size (96 frames x 4 bytes + 4, one 1 ms frame) and the 3-byte feedback
-both point to full speed; unproven.
+Bus speed: FULL. Not in the dump and not readable over adb; the same unit
+in the same mode on macOS reports IOKit "Device Speed" = 1 (full) with
+bcdDevice 0x0225, matching the packet size (96 frames x 4 bytes + 4, one
+1 ms frame) and the 3-byte feedback.
 
 DEVICE+CONFIG (178 bytes):
 12 01 00 02 00 00 00 40 72 29 93 00 25 02 01 03 00 01 09 02 A0 00 03 01
