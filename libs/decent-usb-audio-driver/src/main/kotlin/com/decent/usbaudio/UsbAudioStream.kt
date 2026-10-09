@@ -284,14 +284,6 @@ class UsbAudioStream(
         }
 
         /**
-         * Perform a USB port reset on the device. Resets the DAC's clock state.
-         * The fd remains valid but all interface claims are released.
-         * @return 0 on success, negative on error
-         */
-        @JvmStatic
-        external fun nativeUsbReset(fd: Int): Int
-
-        /**
          * Query the device's operating bus speed via USBDEVFS_GET_SPEED.
          * @return `enum usb_device_speed` value (2=full, 3=high, 5=super),
          *         or -errno on failure (-ENOTTY on kernels < 4.13 — fall

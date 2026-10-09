@@ -443,31 +443,6 @@ class UsbAudioDevice private constructor(private val context: Context) {
     }
 
     /**
-     * Perform a USB device reset via native ioctl, then close and reopen.
-     * This clears any stale clock/endpoint state left by the kernel driver.
-     * After reset, the DAC reinitializes and will accept our SET_CUR.
-     */
-    @Synchronized
-    fun resetAndReopen() {
-        val conn = connection ?: return
-        val fd = conn.fileDescriptor
-
-        Log.i(TAG, "Performing REAL USBDEVFS_RESET on fd=$fd...")
-
-        // Real USB port reset via native ioctl — resets DAC clock state
-        val ret = UsbAudioStream.nativeUsbReset(fd)
-        Log.i(TAG, "USBDEVFS_RESET result: $ret")
-
-        // Reset releases all interface claims. The fd remains valid.
-        // Clear cache so openDevice re-claims, but KEEP the connection
-        // so the same fd is reused (native claims are on this fd).
-        cachedDeviceInfo = null
-        claimedInterface = null
-        // DO NOT close connection — the fd from reset+native claim must be reused
-        // The next openDevice() will see connection != null and skip re-opening
-    }
-
-    /**
      * Parse raw USB descriptors to find the UAC2 Clock Source entity ID.
      * This is the entity that controls the DAC's sample rate.
      *

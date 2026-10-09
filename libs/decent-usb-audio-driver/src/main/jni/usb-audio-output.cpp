@@ -790,23 +790,6 @@ Java_com_decent_usbaudio_UsbAudioStream_nativeGetFramesWritten(
 }
 
 JNIEXPORT jint JNICALL
-Java_com_decent_usbaudio_UsbAudioStream_nativeUsbReset(
-        JNIEnv *, jclass, jint fd) {
-    LOGI("USBDEVFS_RESET fd=%d", fd);
-    int ret = ioctl(fd, USBDEVFS_RESET, 0);
-    if (ret < 0) { LOGE("RESET FAILED errno=%d", errno); return ret; }
-    LOGI("RESET OK, claiming interfaces...");
-    struct usbdevfs_ioctl cmd = {}; cmd.ifno = 0; cmd.ioctl_code = USBDEVFS_DISCONNECT;
-    ioctl(fd, USBDEVFS_IOCTL, &cmd);
-    int i0 = 0; ioctl(fd, USBDEVFS_CLAIMINTERFACE, &i0);
-    cmd.ifno = 1; ioctl(fd, USBDEVFS_IOCTL, &cmd);
-    int i1 = 1; ioctl(fd, USBDEVFS_CLAIMINTERFACE, &i1);
-    struct usbdevfs_setinterface si = {}; si.interface = 1; si.altsetting = 0;
-    ioctl(fd, USBDEVFS_SETINTERFACE, &si);
-    return 0;
-}
-
-JNIEXPORT jint JNICALL
 Java_com_decent_usbaudio_UsbAudioStream_nativeGetBusSpeed(
         JNIEnv *, jclass, jint fd) {
     int ret = ioctl(fd, USBDEVFS_GET_SPEED);
