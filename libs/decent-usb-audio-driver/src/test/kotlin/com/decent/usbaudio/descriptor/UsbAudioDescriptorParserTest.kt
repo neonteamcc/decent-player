@@ -724,6 +724,66 @@ class UsbAudioDescriptorParserTest {
         assertEquals(2, layout.volume!!.unitId)
     }
 
+    // FiiO KA17, same unit and firmware as [ka17], captured on Android with
+    // its own EQ enabled (fiio-ka17-eq-…) and then with S/PDIF out on as well
+    // (fiio-ka17-spdif-…). The device re-enumerates with smaller packets per
+    // mode; clock, units and volume stay put.
+    private val ka17Eq = hex(
+            "12 01 00 02 EF 02 01 40 72 29 93 00 25 02 01 03 00 02 09 02 3C 01 04 01",
+            "00 C0 00 08 0B 00 02 01 00 20 00 09 04 00 00 00 01 01 20 03 09 24 01 00",
+            "02 08 48 00 00 08 24 0A 29 03 07 00 09 08 24 0B 28 01 29 03 08 11 24 02",
+            "02 01 01 00 28 02 00 00 00 00 0B 00 00 06 12 24 06 0A 02 0F 00 00 00 0F",
+            "00 00 00 0F 00 00 00 00 0C 24 03 14 01 03 00 0A 28 00 00 00 09 04 01 00",
+            "00 01 02 20 04 09 04 01 01 02 01 02 20 04 10 24 01 02 00 01 01 00 00 00",
+            "02 00 00 00 00 0B 06 24 02 01 04 20 07 05 01 05 C8 00 01 08 25 01 00 00",
+            "02 08 00 07 05 81 11 04 00 04 09 04 01 02 02 01 02 20 04 10 24 01 02 00",
+            "01 01 00 00 00 02 00 00 00 00 0B 06 24 02 01 02 10 07 05 01 05 64 00 01",
+            "08 25 01 00 00 02 08 00 07 05 81 11 04 00 04 09 04 01 03 02 01 02 20 04",
+            "10 24 01 02 00 01 00 00 00 80 02 00 00 00 00 0B 06 24 02 01 04 20 07 05",
+            "01 05 C8 00 01 08 25 01 00 00 02 08 00 07 05 81 11 04 00 04 09 04 02 00",
+            "00 FE 01 01 0A 09 21 07 FA 00 40 00 10 01 09 04 03 00 02 03 00 00 06 09",
+            "21 11 01 00 01 22 40 00 07 05 83 03 40 00 08 07 05 02 03 40 00 08"
+    )
+
+    private val ka17Spdif = hex(
+            "12 01 00 02 EF 02 01 40 72 29 93 00 25 02 01 03 00 02 09 02 3C 01 04 01",
+            "00 C0 00 08 0B 00 02 01 00 20 00 09 04 00 00 00 01 01 20 03 09 24 01 00",
+            "02 08 48 00 00 08 24 0A 29 03 07 00 09 08 24 0B 28 01 29 03 08 11 24 02",
+            "02 01 01 00 28 02 00 00 00 00 0B 00 00 06 12 24 06 0A 02 0F 00 00 00 0F",
+            "00 00 00 0F 00 00 00 00 0C 24 03 14 01 03 00 0A 28 00 00 00 09 04 01 00",
+            "00 01 02 20 04 09 04 01 01 02 01 02 20 04 10 24 01 02 00 01 01 00 00 00",
+            "02 00 00 00 00 0B 06 24 02 01 04 20 07 05 01 05 68 00 01 08 25 01 00 00",
+            "02 08 00 07 05 81 11 04 00 04 09 04 01 02 02 01 02 20 04 10 24 01 02 00",
+            "01 01 00 00 00 02 00 00 00 00 0B 06 24 02 01 02 10 07 05 01 05 34 00 01",
+            "08 25 01 00 00 02 08 00 07 05 81 11 04 00 04 09 04 01 03 02 01 02 20 04",
+            "10 24 01 02 00 01 00 00 00 80 02 00 00 00 00 0B 06 24 02 01 04 20 07 05",
+            "01 05 68 00 01 08 25 01 00 00 02 08 00 07 05 81 11 04 00 04 09 04 02 00",
+            "00 FE 01 01 0A 09 21 07 FA 00 40 00 10 01 09 04 03 00 02 03 00 00 06 09",
+            "21 11 01 00 01 22 40 00 07 05 83 03 40 00 08 07 05 02 03 40 00 08"
+    )
+
+    @Test
+    fun ka17Modes_shrinkThePacketsAndKeepTheTopology() {
+        for ((mode, bytes, wide, narrow) in listOf(
+                Quad("eq", ka17Eq, 200, 100),
+                Quad("spdif", ka17Spdif, 104, 52),
+        )) {
+            val layout = UsbAudioDescriptorParser.parse(bytes)!!
+            assertEquals(mode, UacVersion.UAC2, layout.uacVersion)
+            assertEquals(mode, 0x29, layout.clockSourceId)
+            assertEquals(mode, listOf(1, 2, 3), layout.streamingAlts.map { it.altSetting })
+            assertEquals(mode, listOf(wide, narrow, wide), layout.streamingAlts.map { it.maxPacketSize })
+            assertEquals(mode, listOf(32, 16, 32), layout.streamingAlts.map { it.bitResolution })
+            assertEquals(mode, 1, layout.selectPlaybackAlt(1, true)?.altSetting)
+            val vol = layout.volume!!
+            assertEquals(mode, 10, vol.unitId)
+            assertTrue(mode, vol.masterVolume)
+            assertEquals(mode, listOf(0), vol.writeChannels)
+        }
+    }
+
+    private data class Quad(val mode: String, val bytes: ByteArray, val wide: Int, val narrow: Int)
+
     private fun hex(vararg rows: String): ByteArray =
             rows.joinToString(" ")
                     .split(Regex("\\s+"))

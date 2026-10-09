@@ -1,0 +1,27 @@
+FiiO KA17 (2972:0093) with its S/PDIF output switched on: byte-exact raw
+descriptors from `adb shell dumpsys usb dump-descriptors -dump-raw` on a
+Pixel 10 Pro XL, Android 17, firmware bcdDevice 2.25, captured 2026-10-09,
+right after fiio-ka17-eq-2972-0093-rawdescriptors.txt (EQ enabled, in
+bypass) with only S/PDIF out turned on in between. The dump lists the
+configuration twice; the second copy is byte-identical and omitted.
+
+The only bytes that differ from that EQ capture are the three playback
+wMaxPacketSize values: 104 bytes (32-bit alts 1 and 3) and 52 bytes
+(16-bit alt 2), i.e. 13 frames per microframe — the 96 kHz ceiling FiiO
+documents for the KA17's S/PDIF output.
+
+DEVICE+CONFIG0 (334 bytes):
+12 01 00 02 EF 02 01 40 72 29 93 00 25 02 01 03 00 02 09 02 3C 01 04 01
+00 C0 00 08 0B 00 02 01 00 20 00 09 04 00 00 00 01 01 20 03 09 24 01 00
+02 08 48 00 00 08 24 0A 29 03 07 00 09 08 24 0B 28 01 29 03 08 11 24 02
+02 01 01 00 28 02 00 00 00 00 0B 00 00 06 12 24 06 0A 02 0F 00 00 00 0F
+00 00 00 0F 00 00 00 00 0C 24 03 14 01 03 00 0A 28 00 00 00 09 04 01 00
+00 01 02 20 04 09 04 01 01 02 01 02 20 04 10 24 01 02 00 01 01 00 00 00
+02 00 00 00 00 0B 06 24 02 01 04 20 07 05 01 05 68 00 01 08 25 01 00 00
+02 08 00 07 05 81 11 04 00 04 09 04 01 02 02 01 02 20 04 10 24 01 02 00
+01 01 00 00 00 02 00 00 00 00 0B 06 24 02 01 02 10 07 05 01 05 34 00 01
+08 25 01 00 00 02 08 00 07 05 81 11 04 00 04 09 04 01 03 02 01 02 20 04
+10 24 01 02 00 01 00 00 00 80 02 00 00 00 00 0B 06 24 02 01 04 20 07 05
+01 05 68 00 01 08 25 01 00 00 02 08 00 07 05 81 11 04 00 04 09 04 02 00
+00 FE 01 01 0A 09 21 07 FA 00 40 00 10 01 09 04 03 00 02 03 00 00 06 09
+21 11 01 00 01 22 40 00 07 05 83 03 40 00 08 07 05 02 03 40 00 08
