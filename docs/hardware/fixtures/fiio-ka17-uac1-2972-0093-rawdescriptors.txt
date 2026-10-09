@@ -21,6 +21,12 @@ speed): unlike in UAC2, the EQ does not change the UAC1 layout. S/PDIF
 out, by contrast, forces UAC2 (see fiio-ka17-spdif-…; the unit's own
 screen shows the switch).
 
+FU#10 volume in this mode (UAC1 GET_MIN/MAX/RES/CUR on macOS, EQ off):
+-127.0 .. 0.0 dB, resolution 1.0 dB, on channels 1 and 2 — and on the
+master channel too, although bmaControls(0) declares no controls. UAC2
+with the EQ off answers -100.0 .. 0.0 dB instead (fiio-ka17-…). Runtime
+answers, not part of these bytes.
+
 DEVICE+CONFIG (178 bytes):
 12 01 00 02 00 00 00 40 72 29 93 00 25 02 01 03 00 01 09 02 A0 00 03 01
 00 C0 00 09 04 00 00 00 01 01 00 08 09 24 01 00 01 28 00 01 01 0C 24 02
