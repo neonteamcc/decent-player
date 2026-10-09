@@ -13,6 +13,10 @@ and 3) and 52 bytes (16-bit alt 2), i.e. 13 frames per microframe — the
 not with the EQ as such; only the plain mode enumerates the 5-interface,
 776/388-byte layout.
 
+With the EQ switched on as well and the KA17 replugged (fresh
+enumeration), the capture is byte-identical to this one: S/PDIF out's
+96 kHz layout wins over the EQ's 192 kHz one.
+
 DEVICE+CONFIG0 (334 bytes):
 12 01 00 02 EF 02 01 40 72 29 93 00 25 02 01 03 00 02 09 02 3C 01 04 01
 00 C0 00 08 0B 00 02 01 00 20 00 09 04 00 00 00 01 01 20 03 09 24 01 00
