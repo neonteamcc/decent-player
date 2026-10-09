@@ -782,6 +782,44 @@ class UsbAudioDescriptorParserTest {
         }
     }
 
+    // FiiO KA17 in its UAC 1.0 mode (fiio-ka17-uac1-…), Android capture.
+    private val ka17Uac1 = hex(
+            "12 01 00 02 00 00 00 40 72 29 93 00 25 02 01 03 00 01 09 02 A0 00 03 01",
+            "00 C0 00 09 04 00 00 00 01 01 00 08 09 24 01 00 01 28 00 01 01 0C 24 02",
+            "01 01 01 00 02 03 00 10 0B 0A 24 06 0A 01 01 00 03 03 00 09 24 03 06 01",
+            "03 00 0A 00 09 04 01 00 00 01 02 00 09 09 04 01 01 02 01 02 00 04 07 24",
+            "01 01 01 01 00 14 24 02 01 02 02 10 04 44 AC 00 80 BB 00 88 58 01 00 77",
+            "01 09 05 01 05 84 01 01 00 81 07 25 01 01 02 00 00 09 05 81 01 03 00 01",
+            "04 00 09 04 03 00 02 03 00 00 00 09 21 10 01 00 01 22 40 00 07 05 83 03",
+            "40 00 08 07 05 02 03 40 00 08"
+    )
+
+    @Test
+    fun ka17Uac1_parsesTheSameUnitAsUac1() {
+        val layout = UsbAudioDescriptorParser.parse(ka17Uac1)!!
+        assertEquals(UacVersion.UAC1, layout.uacVersion)
+        assertEquals(0, layout.controlInterfaceId)
+        val alt = layout.streamingAlts.single()
+        assertEquals(1, alt.interfaceId)
+        assertEquals(1, alt.altSetting)
+        assertEquals(2, alt.channels)
+        assertEquals(16, alt.bitResolution)
+        assertEquals(listOf(44100, 48000, 88200, 96000), alt.sampleRates)
+        assertTrue(alt.hasSampleRateControl)
+        assertEquals(0x01, alt.endpointAddress)
+        assertEquals(388, alt.maxPacketSize)
+        assertEquals(UsbSyncType.ASYNC, alt.syncType)
+        assertTrue(alt.rateFitsMaxPacket(96000))
+        val fb = alt.feedback!!
+        assertEquals(0x81, fb.address)
+        assertEquals(3, fb.maxPacketSize)
+        assertEquals(4, fb.refresh)
+        val vol = layout.volume!!
+        assertEquals(10, vol.unitId)
+        assertFalse(vol.masterVolume)
+        assertEquals(listOf(1, 2), vol.writeChannels)
+    }
+
     private data class Quad(val mode: String, val bytes: ByteArray, val wide: Int, val narrow: Int)
 
     private fun hex(vararg rows: String): ByteArray =
