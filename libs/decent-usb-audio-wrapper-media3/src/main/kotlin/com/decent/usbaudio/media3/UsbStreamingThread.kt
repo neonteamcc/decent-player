@@ -1,5 +1,6 @@
 package com.decent.usbaudio.media3
 
+import android.os.Process
 import android.util.Log
 import com.decent.usbaudio.UsbAudioStream
 import java.util.concurrent.ArrayBlockingQueue
@@ -55,6 +56,12 @@ class UsbStreamingThread internal constructor(private val output: Output) {
     fun start() {
         running = true
         thread = Thread({
+            // Thread.MAX_PRIORITY below only reaches nice -8 (display),
+            // measured on device; there the pump lost the CPU to UI bursts
+            // long enough to underrun its ~80 ms URB cushion. Set from inside
+            // the thread so every respawn (rate change, track transition)
+            // starts at urgent-audio without the host scanning for it.
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
             Log.i(TAG, "USB streaming thread started")
             try {
                 while (running) {
