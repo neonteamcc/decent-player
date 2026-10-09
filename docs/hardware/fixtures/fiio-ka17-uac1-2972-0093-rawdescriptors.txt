@@ -15,6 +15,12 @@ in the same mode on macOS reports IOKit "Device Speed" = 1 (full) with
 bcdDevice 0x0225, matching the packet size (96 frames x 4 bytes + 4, one
 1 ms frame) and the 3-byte feedback.
 
+With the EQ switched on in UAC 1.0 mode the unit enumerates byte-identical
+to this capture (macOS libusb GET_DESCRIPTOR after a re-enumeration, full
+speed): unlike in UAC2, the EQ does not change the UAC1 layout. S/PDIF
+out, by contrast, forces UAC2 (see fiio-ka17-spdif-…; the unit's own
+screen shows the switch).
+
 DEVICE+CONFIG (178 bytes):
 12 01 00 02 00 00 00 40 72 29 93 00 25 02 01 03 00 01 09 02 A0 00 03 01
 00 C0 00 09 04 00 00 00 01 01 00 08 09 24 01 00 01 28 00 01 01 0C 24 02
