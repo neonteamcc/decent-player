@@ -6,7 +6,10 @@ High-speed UAC2, async feedback, FU#10 master Mute+Volume, alt3 = DSD
 FU#10 volume RANGE (UAC2 GET RANGE on macOS, 2026-10-09, firmware 2.25,
 master and both channels alike): -100.0 .. 0.0 dB, resolution 1.0 dB.
 With the unit's EQ on it answers -127.0 .. 0.0 dB instead (see
-fiio-ka17-eq-…). Runtime answers, not part of these bytes.
+fiio-ka17-eq-…). Runtime answers, not part of these bytes. The unit's
+own volume (its knob and screen, 60 or 120 steps) is a separate stage:
+switching 60/120 steps leaves FU#10's range and level unchanged, and
+writing FU#10 does not move the screen's volume.
 
 DEVICE+CONFIG0:
 12 01 00 02 EF 02 01 40 72 29 93 00 25 02 01 03 02 02 09 02 55 01 05 01
