@@ -58,10 +58,11 @@ class UsbStreamingThread internal constructor(private val output: Output) {
         thread = Thread({
             // Thread.MAX_PRIORITY below only reaches nice -8 (display),
             // measured on device; there the pump lost the CPU to UI bursts
-            // long enough to underrun its ~80 ms URB cushion. Set from inside
+            // long enough to underrun its ~80 ms URB cushion. Audio priority,
+            // the level media3 gives its own playback thread. Set from inside
             // the thread so every respawn (rate change, track transition)
-            // starts at urgent-audio without the host scanning for it.
-            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+            // starts there without the host scanning for it.
+            Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
             Log.i(TAG, "USB streaming thread started")
             try {
                 while (running) {
