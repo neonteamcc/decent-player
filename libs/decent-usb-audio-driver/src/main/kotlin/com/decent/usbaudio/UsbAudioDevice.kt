@@ -40,6 +40,9 @@ class UsbAudioDevice private constructor(private val context: Context) {
     private var currentDevice: UsbDevice? = null
     private var claimedInterface: UsbInterface? = null
 
+    /** Every other audio interface claimed with it (control, capture, …). */
+    private val claimedSiblings = mutableListOf<UsbInterface>()
+
     companion object {
         private const val TAG = "UsbAudioDevice"
         private const val ACTION_USB_PERMISSION_SUFFIX = ".USB_AUDIO_PERMISSION"
@@ -172,6 +175,23 @@ class UsbAudioDevice private constructor(private val context: Context) {
             return null
         }
 
+        // Parse the full descriptor layout: UAC version, alt settings with
+        // formats/rates, endpoints, sync types. This is the class-agnostic
+        // source of truth; the legacy UAC2-offset parsers below remain the
+        // fallback when parsing fails. Parsed before the interface scan: it
+        // names the PLAYBACK streaming interface (capture alts are dropped).
+        val layout = try {
+            val activeConfiguration = ByteArray(1)
+            val active = if (conn.controlTransfer(0x80, 8, 0, 0, activeConfiguration, 1, 1000) == 1) {
+                (activeConfiguration[0].toInt() and 0xFF).takeIf { it > 0 }
+            } else null
+            conn.rawDescriptors?.let { UsbAudioDescriptorParser.parse(it, active) }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Descriptor layout parse failed", t)
+            null
+        }
+        val playbackInterfaceId = layout?.streamingAlts?.firstOrNull()?.interfaceId
+
         // Find the AudioStreaming interface and its endpoints
         var streamingInterface: UsbInterface? = null
         var endpointOut = -1
@@ -186,8 +206,13 @@ class UsbAudioDevice private constructor(private val context: Context) {
                 iface.interfaceSubclass == 2) {
                 altSettingCount++
 
-                // Look for endpoints in non-zero alt settings
-                if (iface.endpointCount > 0 && streamingInterface == null) {
+                // The playback interface: an alt with an iso OUT data
+                // endpoint. A capture interface ahead of it in the
+                // descriptors (iso IN only) used to be taken instead, and
+                // the open then failed with no OUT endpoint to stream to.
+                if (iface.endpointCount > 0 && streamingInterface == null &&
+                        (playbackInterfaceId == null || iface.id == playbackInterfaceId) &&
+                        hasIsoOut(iface)) {
                     streamingInterface = iface
 
                     for (e in 0 until iface.endpointCount) {
@@ -228,6 +253,7 @@ class UsbAudioDevice private constructor(private val context: Context) {
         if (controlInterface != null) {
             val claimed = conn.claimInterface(controlInterface, true)
             Log.i(TAG, "Claimed AudioControl interface ${controlInterface.id} force=true: $claimed")
+            if (claimed) claimedSiblings += controlInterface
         }
 
         // Claim the AudioStreaming interface with force=true to disconnect kernel driver (snd-usb-audio)
@@ -243,11 +269,31 @@ class UsbAudioDevice private constructor(private val context: Context) {
         }
         claimedInterface = streamingInterface
 
-        // Force alt=0 to stop any streaming left by kernel driver
+        // Every remaining audio interface too (capture, a second playback
+        // function): one left to the kernel keeps part of the system's sound
+        // card alive beside a device we stream to directly. A refusal is
+        // logged, not fatal — playback needs only the two claimed above.
+        (0 until device.interfaceCount)
+                .map { device.getInterface(it) }
+                .filter { it.interfaceClass == UsbConstants.USB_CLASS_AUDIO }
+                .distinctBy { it.id }
+                .filter { it.id != streamingInterface.id && it.id != controlInterface?.id }
+                .forEach { sibling ->
+                    if (conn.claimInterface(sibling, true)) {
+                        claimedSiblings += sibling
+                        Log.i(TAG, "Claimed audio interface ${sibling.id} " +
+                                "(subclass ${sibling.interfaceSubclass}) force=true")
+                    } else {
+                        Log.w(TAG, "Could not claim audio interface ${sibling.id} " +
+                                "(subclass ${sibling.interfaceSubclass}) — the kernel keeps it")
+                    }
+                }
+
+        // Force alt=0 to stop any streaming left by kernel driver — on the
+        // interface we stream to, not whichever streaming interface is first.
         val zeroAlt = (0 until device.interfaceCount)
                 .map { device.getInterface(it) }
-                .firstOrNull { it.interfaceClass == UsbConstants.USB_CLASS_AUDIO &&
-                        it.interfaceSubclass == 2 && it.alternateSetting == 0 }
+                .firstOrNull { it.id == streamingInterface.id && it.alternateSetting == 0 }
         if (zeroAlt != null) {
             conn.setInterface(zeroAlt)
             Log.i(TAG, "Reset streaming to alt=0 (zero-bandwidth)")
@@ -274,20 +320,6 @@ class UsbAudioDevice private constructor(private val context: Context) {
         connection = conn
         currentDevice = device
 
-        // Parse the full descriptor layout: UAC version, alt settings with
-        // formats/rates, endpoints, sync types. This is the class-agnostic
-        // source of truth; the legacy UAC2-offset parsers below remain the
-        // fallback when parsing fails.
-        val layout = try {
-            val activeConfiguration = ByteArray(1)
-            val active = if (conn.controlTransfer(0x80, 8, 0, 0, activeConfiguration, 1, 1000) == 1) {
-                (activeConfiguration[0].toInt() and 0xFF).takeIf { it > 0 }
-            } else null
-            conn.rawDescriptors?.let { UsbAudioDescriptorParser.parse(it, active) }
-        } catch (t: Throwable) {
-            Log.w(TAG, "Descriptor layout parse failed", t)
-            null
-        }
         val uacVersion = layout?.uacVersion ?: UacVersion.UAC2
         val busSpeed = detectBusSpeed(fd, conn, layout)
         Log.i(TAG, "Detected: uacVersion=$uacVersion busSpeed=$busSpeed " +
@@ -589,6 +621,12 @@ class UsbAudioDevice private constructor(private val context: Context) {
         return best
     }
 
+    private fun hasIsoOut(iface: UsbInterface): Boolean =
+            (0 until iface.endpointCount).any {
+                val ep = iface.getEndpoint(it)
+                ep.type == UsbConstants.USB_ENDPOINT_XFER_ISOC && ep.direction == UsbConstants.USB_DIR_OUT
+            }
+
     /**
      * Close the USB device and release all resources.
      *
@@ -607,6 +645,8 @@ class UsbAudioDevice private constructor(private val context: Context) {
             connection?.releaseInterface(iface)
             claimedInterface = null
         }
+        claimedSiblings.forEach { connection?.releaseInterface(it) }
+        claimedSiblings.clear()
         connection?.close()
         connection = null
         currentDevice = null
