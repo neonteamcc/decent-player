@@ -820,10 +820,10 @@ class UsbAudioDescriptorParserTest {
         assertEquals(listOf(1, 2), vol.writeChannels)
     }
 
-    // Rates a UAC2 clock RANGE can claim regardless of the alt's packet
-    // budget: the KA17 modes below cut the packets, not (necessarily) the
-    // clock's list — whether it trims the list is a device answer the
-    // descriptors cannot show, so the packet budget must hold on its own.
+    // A worst-case clock RANGE that ignores the alt's packet budget. The real
+    // KA17 trims its RANGE with the packets (to 192 kHz with the EQ, 96 kHz
+    // with S/PDIF; measured, see the fixtures), so this list is synthetic: it
+    // pins that the packet budget holds on its own for a device that does not.
     private val fullRange = listOf(44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600, 768000)
 
     private fun choose(bytes: ByteArray, speed: UsbBusSpeed, track: Int, rates: List<Int> = fullRange) =

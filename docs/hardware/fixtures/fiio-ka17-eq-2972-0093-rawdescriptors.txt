@@ -16,6 +16,9 @@ Bus speed: HIGH. The same mode read on macOS via libusb GET_DESCRIPTOR
 after a re-enumeration is byte-identical (650 bytes) and reports high
 speed, so 200 bytes per 125 us microframe is the ~192 kHz ceiling.
 
+Clock source 0x29 SAM_FREQ RANGE in this mode (macOS): 44.1, 48, 88.2,
+96, 176.4, 192 kHz — trimmed together with the packets.
+
 FU#10 volume RANGE in this mode (UAC2 GET RANGE on macOS, master and both
 channels alike): -127.0 .. 0.0 dB, resolution 1.0 dB. With the EQ off the
 same unit answers -100.0 .. 0.0 dB, resolution 1.0 dB. The range is a

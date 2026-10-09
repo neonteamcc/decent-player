@@ -8,7 +8,8 @@ byte-identical to the first and omitted.
 The only bytes that differ from fiio-ka17-eq-2972-0093-rawdescriptors.txt
 are the three playback wMaxPacketSize values: 104 bytes (32-bit alts 1
 and 3) and 52 bytes (16-bit alt 2), i.e. 13 frames per microframe — the
-96 kHz ceiling FiiO documents for the KA17's S/PDIF output. So the
+96 kHz ceiling FiiO documents for the KA17's S/PDIF output. The clock source's SAM_FREQ RANGE
+trims to match (macOS): 44.1, 48, 88.2, 96 kHz. So the
 4-interface layout and the per-channel Volume bits come with either mode,
 not with the EQ as such; only the plain mode enumerates the 5-interface,
 776/388-byte layout.

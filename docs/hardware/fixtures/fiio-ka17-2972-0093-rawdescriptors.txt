@@ -3,6 +3,11 @@ on macOS (device + configuration 0; configuration 1 is byte-identical).
 High-speed UAC2, async feedback, FU#10 master Mute+Volume, alt3 = DSD
 (AS_GENERAL bmFormats 0x80000000 RAW_DATA).
 
+Clock source 0x29 SAM_FREQ RANGE (UAC2 GET RANGE on macOS, 2026-10-09):
+44.1, 48, 88.2, 96, 176.4, 192, 352.8, 384, 705.6, 768 kHz — all fit the
+776-byte packets. The EQ and S/PDIF modes trim this list together with
+their packets (see those fixtures).
+
 FU#10 volume RANGE (UAC2 GET RANGE on macOS, 2026-10-09, firmware 2.25,
 master and both channels alike): -100.0 .. 0.0 dB, resolution 1.0 dB.
 With the unit's EQ on it answers -127.0 .. 0.0 dB instead (see
