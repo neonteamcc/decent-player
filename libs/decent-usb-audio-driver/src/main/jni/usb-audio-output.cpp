@@ -327,6 +327,9 @@ static int reapOldestUrb(UsbAudioContext *ctx, int timeoutMs) {
  * Drain ALL in-flight URBs. Blocks until every URB is reaped or timeout.
  * @return Number of URBs successfully drained
  */
+/** Phase-1 wait for each in-flight URB to complete on its own, in ms. */
+static constexpr int kDrainNaturalReapMs = 20;
+
 static int drainAllUrbs(UsbAudioContext *ctx) {
     int drained = 0;
     int initialCount = ctx->urbsInFlight;
@@ -346,9 +349,15 @@ static int drainAllUrbs(UsbAudioContext *ctx) {
         ctx->feedbackInFlight = false;
     }
 
-    // Phase 1: try to reap naturally (URBs that completed normally)
+    // Phase 1: try to reap naturally (URBs that completed normally).
+    // In-flight URBs complete one per bus interval (1 ms at high speed), so
+    // a short per-URB wait covers the normal case; one that does not come
+    // back goes to the discard below. The wait used to be 500 ms: a single
+    // URB that never completed held the stream's release that long, past
+    // media3's release timeout, while the host closed the device under it
+    // (field log: 79/80 reaped, then the reap failed with EBADF).
     while (ctx->urbsInFlight > 0) {
-        int result = reapOldestUrb(ctx, 500);
+        int result = reapOldestUrb(ctx, kDrainNaturalReapMs);
         if (result == 0) {
             drained++;
         } else {
