@@ -673,6 +673,57 @@ class UsbAudioDescriptorParserTest {
         )))
     }
 
+    // DERIVED, not captured: the FreeDSP capture above with its capture
+    // chain (OT#6 <- FU#5 <- mic IT#4) moved ahead of the playback chain in
+    // the AudioControl descriptors, and capture interface 2 moved ahead of
+    // playback interface 1. Same bytes, same lengths, only the order.
+    private val freeDspCaptureFirst = hex(
+            "12 01 00 02 EF 02 01 40 D8 35 96 14 06 00 01 02 00 01 09 02 A6 01 04 01 04 A0 32 08 0B 00 03 01",
+            "00 20 00 09 04 00 00 00 01 01 20 00 09 24 01 00 02 04 73 00 00 08 24 0A 0A 03 07 00 00 0C 24 03",
+            "06 01 01 00 05 0A 00 00 00 0E 24 06 05 04 03 00 00 00 0C 00 00 00 06 11 24 02 04 01 02 03 0A 01",
+            "01 00 00 00 00 00 00 00 08 24 0A 09 03 07 00 00 11 24 02 01 01 01 00 09 02 03 00 00 00 00 00 00",
+            "00 12 24 06 02 01 03 00 00 00 0C 00 00 00 0C 00 00 00 04 0C 24 03 03 02 04 04 02 09 00 00 00 09",
+            "04 02 00 00 01 02 20 00 09 04 02 01 01 01 02 20 00 10 24 01 06 00 01 01 00 00 00 01 01 00 00 00",
+            "00 06 24 02 01 02 10 07 05 81 0D 0C 00 01 08 25 01 00 00 02 02 00 09 04 02 02 01 01 02 20 00 10",
+            "24 01 06 05 01 01 00 00 00 01 01 00 00 00 00 06 24 02 01 03 18 07 05 81 0D 12 00 01 08 25 01 00",
+            "00 02 02 00 09 04 01 00 00 01 02 20 00 09 04 01 01 01 01 02 20 00 10 24 01 01 00 01 01 00 00 00",
+            "02 03 00 00 00 00 06 24 02 01 02 10 07 05 01 0D C0 00 01 08 25 01 00 00 02 02 00 09 04 01 02 01",
+            "01 02 20 00 10 24 01 01 00 01 01 00 00 00 02 03 00 00 00 00 06 24 02 01 03 18 07 05 01 0D 20 01",
+            "01 08 25 01 00 00 02 02 00 09 04 01 03 01 01 02 20 00 10 24 01 01 00 01 01 00 00 00 02 03 00 00",
+            "00 00 06 24 02 01 04 20 07 05 01 0D 80 01 01 08 25 01 00 00 02 02 00 08 0B 03 01 03 00 00 00 09",
+            "04 03 00 01 03 00 00 00 09 21 11 01 00 01 22 3F 00 07 05 83 03 40 00 07"
+    )
+
+    @Test
+    fun fixtures_keepTheirPlaybackVolumeUnit() {
+        // The topology walk must land every captured device where the
+        // one-hop rule (and its any-FU fallback) did.
+        val expected = mapOf(
+                "btr13" to Triple(btr13, 2, true), "btr3k" to Triple(btr3k, 2, false),
+                "dragonfly" to Triple(dragonfly, 5, true), "appleUac2" to Triple(appleUac2, 2, false),
+                "ka17" to Triple(ka17, 10, true), "kmHifi" to Triple(kmHifi, 2, false),
+                "fosiDs2" to Triple(fosiDs2, 10, false), "dawnPro2" to Triple(dawnPro2, 10, false),
+                "fiioKa11" to Triple(fiioKa11, 10, false), "freeDsp" to Triple(freeDsp, 2, false),
+        )
+        for ((name, e) in expected) {
+            val vol = UsbAudioDescriptorParser.parse(e.first)!!.volume
+            assertEquals(name, e.second, vol?.unitId)
+            assertEquals(name, e.third, vol?.masterVolume)
+        }
+        assertNull(UsbAudioDescriptorParser.parse(cayinN3)!!.volume)
+        assertNull(UsbAudioDescriptorParser.parse(sbXfi)!!.volume)
+    }
+
+    @Test
+    fun captureFirst_playbackInterfaceAndVolumeFollowTheStream() {
+        val layout = UsbAudioDescriptorParser.parse(freeDspCaptureFirst)!!
+        // The device opens the playback interface, not the first one listed.
+        assertEquals(setOf(1), layout.streamingAlts.map { it.interfaceId }.toSet())
+        // The microphone's FU#5 comes first and carries Volume; the playback
+        // volume is FU#2, the one between the USB stream and the output.
+        assertEquals(2, layout.volume!!.unitId)
+    }
+
     private fun hex(vararg rows: String): ByteArray =
             rows.joinToString(" ")
                     .split(Regex("\\s+"))

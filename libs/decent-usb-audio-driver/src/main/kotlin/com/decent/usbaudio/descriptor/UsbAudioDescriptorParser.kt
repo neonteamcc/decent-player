@@ -52,6 +52,7 @@ object UsbAudioDescriptorParser {
 
     // AudioControl CS_INTERFACE subtypes
     private const val AC_HEADER = 0x01
+    private const val AC_INPUT_TERMINAL = 0x02
     private const val AC_OUTPUT_TERMINAL = 0x03
     private const val AC_FEATURE_UNIT = 0x06
     private const val AC_CLOCK_SOURCE_UAC2 = 0x0A
@@ -81,12 +82,13 @@ object UsbAudioDescriptorParser {
         var clockSourceId = -1
         val alts = mutableListOf<StreamingAltSetting>()
 
-        // Volume discovery: Feature Units by bUnitID, plus the bSourceID of
-        // each speaker/headphone Output Terminal — the FU directly feeding
-        // an output OT is the playback volume (one hop covers every device
-        // in the fixture set; fallback: any FU with volume).
+        // Volume discovery: Feature Units by bUnitID, and every unit and
+        // terminal of the audio function, resolved into a graph after the
+        // walk (the UAC version, which decides some layouts, is final then).
+        // See [playbackVolume].
         val featureUnits = mutableMapOf<Int, VolumeControl>()
         val outputSources = mutableListOf<Int>()
+        val acEntities = mutableListOf<Pair<Int, Int>>() // (offset, length)
 
         // Current interface context
         var inAudioControl = false
@@ -174,6 +176,9 @@ object UsbAudioDescriptorParser {
                             parseFeatureUnit(raw, i, len, uacVersion)
                                     ?.let { featureUnits[it.unitId] = it }
                         }
+                        if (controlInterfaceId == currentInterfaceId && subtype >= AC_INPUT_TERMINAL) {
+                            acEntities += i to len
+                        }
                     }
                     if (inAudioStreaming) {
                         builder?.onCsInterface(raw, i, len, subtype)
@@ -196,8 +201,12 @@ object UsbAudioDescriptorParser {
 
         if (uacVersion == UacVersion.UNKNOWN && controlInterfaceId < 0) return null
 
-        val volume = outputSources.firstNotNullOfOrNull { featureUnits[it] }
-                ?: featureUnits.values.firstOrNull { it.hasVolume }
+        val volume = playbackVolume(raw, acEntities, uacVersion, featureUnits)
+                ?: if (playbackPathFound(raw, acEntities, uacVersion)) null else
+                    // No output reaches the USB stream in what we could read
+                    // (a unit type this parser does not know): the old rule.
+                    outputSources.firstNotNullOfOrNull { featureUnits[it] }
+                            ?: featureUnits.values.firstOrNull { it.hasVolume }
 
         return UsbAudioDeviceLayout(
                 uacVersion = uacVersion,
@@ -207,6 +216,80 @@ object UsbAudioDescriptorParser {
                 volume = volume?.takeIf { it.hasVolume },
         )
     }
+
+    private const val TT_USB_STREAMING = 0x0101
+
+    private class Entity(val isInput: Boolean, val terminalType: Int, val sources: List<Int>)
+
+    /**
+     * The topology entity at [i]: input terminals, output terminals and every
+     * unit that passes audio, with the IDs it takes audio from. Clock
+     * entities carry no audio and are left out.
+     */
+    private fun entityAt(raw: ByteArray, i: Int, len: Int, uac: UacVersion): Pair<Int, Entity>? {
+        fun b(o: Int) = raw[i + o].toInt() and 0xFF
+        fun pins(countAt: Int): List<Int> =
+                if (len <= countAt) emptyList()
+                else (0 until b(countAt)).mapNotNull { k -> (countAt + 1 + k).takeIf { it < len }?.let(::b) }
+        val subtype = b(2)
+        val id = if (len > 3) b(3) else return null
+        val entity = when (subtype) {
+            AC_INPUT_TERMINAL -> if (len >= 6) Entity(true, le16(raw, i + 4), emptyList()) else null
+            AC_OUTPUT_TERMINAL -> if (len >= 8) Entity(false, le16(raw, i + 4), listOf(b(7))) else null
+            0x04, 0x05 -> Entity(false, 0, pins(4))                              // mixer, selector
+            AC_FEATURE_UNIT -> if (len >= 5) Entity(false, 0, listOf(b(4))) else null
+            else -> if (uac == UacVersion.UAC2) when (subtype) {
+                0x07 -> if (len >= 7) Entity(false, 0, listOf(b(6))) else null   // effect
+                0x08, 0x09 -> Entity(false, 0, pins(6))                          // processing, extension
+                0x0D -> if (len >= 5) Entity(false, 0, listOf(b(4))) else null   // sample-rate converter
+                else -> null
+            } else when (subtype) {
+                0x07, 0x08 -> Entity(false, 0, pins(6))                          // processing, extension
+                else -> null
+            }
+        } ?: return null
+        return id to entity
+    }
+
+    /**
+     * Output terminals whose audio comes from the host's USB stream, each
+     * with the nearest volume-capable Feature Unit on that path (null when
+     * the path has none). Speaker/headphone terminals first. Walking the
+     * real path keeps a microphone's or a sidetone's Feature Unit from
+     * standing in for the playback volume.
+     */
+    private fun playbackPaths(
+            raw: ByteArray,
+            at: List<Pair<Int, Int>>,
+            uac: UacVersion,
+            featureUnits: Map<Int, VolumeControl>,
+    ): List<VolumeControl?> {
+        val entities = at.mapNotNull { (i, len) -> entityAt(raw, i, len, uac) }.toMap()
+        fun walk(id: Int, seen: MutableSet<Int>): Pair<Boolean, VolumeControl?> {
+            if (!seen.add(id)) return false to null
+            val e = entities[id] ?: return false to null
+            if (e.isInput) return (e.terminalType == TT_USB_STREAMING) to null
+            for (source in e.sources) {
+                val (reaches, below) = walk(source, seen)
+                if (reaches) return true to (featureUnits[id]?.takeIf { it.hasVolume } ?: below)
+            }
+            return false to null
+        }
+        return entities
+                .filter { (_, e) -> !e.isInput && (e.terminalType shr 8) != 0x01 }
+                .entries
+                .sortedBy { (_, e) -> if ((e.terminalType shr 8) == 0x03) 0 else 1 }
+                .map { (id, _) -> walk(id, mutableSetOf()) }
+                .filter { (reaches, _) -> reaches }
+                .map { (_, volume) -> volume }
+    }
+
+    private fun playbackVolume(
+            raw: ByteArray, at: List<Pair<Int, Int>>, uac: UacVersion, featureUnits: Map<Int, VolumeControl>,
+    ): VolumeControl? = playbackPaths(raw, at, uac, featureUnits).firstNotNullOfOrNull { it }
+
+    private fun playbackPathFound(raw: ByteArray, at: List<Pair<Int, Int>>, uac: UacVersion): Boolean =
+            playbackPaths(raw, at, uac, emptyMap()).isNotEmpty()
 
     /**
      * Parse a FEATURE_UNIT's bmaControls into a [VolumeControl].
