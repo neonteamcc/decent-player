@@ -9,7 +9,8 @@ fiio-ka17-2972-0093-rawdescriptors.txt (first 359 bytes compared).
 Differences from that EQ-off layout: 4 interfaces instead of 5 (one HID
 less), playback packets 200 bytes (32-bit alts 1 and 3) and 100 bytes
 (16-bit alt 2) instead of 776 and 388, and FU#10 advertises Mute+Volume on
-channels 1 and 2 as well as the master.
+channels 1 and 2 as well as the master. S/PDIF out with the EQ off shares
+all of this except the packet sizes (fiio-ka17-spdif-…).
 
 DEVICE+CONFIG0 (334 bytes):
 12 01 00 02 EF 02 01 40 72 29 93 00 25 02 01 03 00 02 09 02 3C 01 04 01

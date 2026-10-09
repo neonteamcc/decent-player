@@ -1,14 +1,17 @@
 FiiO KA17 (2972:0093) with its S/PDIF output switched on: byte-exact raw
 descriptors from `adb shell dumpsys usb dump-descriptors -dump-raw` on a
-Pixel 10 Pro XL, Android 17, firmware bcdDevice 2.25, captured 2026-10-09,
-right after fiio-ka17-eq-2972-0093-rawdescriptors.txt (EQ enabled, in
-bypass) with only S/PDIF out turned on in between. The dump lists the
-configuration twice; the second copy is byte-identical and omitted.
+Pixel 10 Pro XL, Android 17, firmware bcdDevice 2.25, captured 2026-10-09
+with the EQ off and S/PDIF out on (as reported by the device owner). The
+dump lists the configuration twice; the second copy is byte-identical and
+omitted.
 
-The only bytes that differ from that EQ capture are the three playback
-wMaxPacketSize values: 104 bytes (32-bit alts 1 and 3) and 52 bytes
-(16-bit alt 2), i.e. 13 frames per microframe — the 96 kHz ceiling FiiO
-documents for the KA17's S/PDIF output.
+The only bytes that differ from fiio-ka17-eq-2972-0093-rawdescriptors.txt
+are the three playback wMaxPacketSize values: 104 bytes (32-bit alts 1
+and 3) and 52 bytes (16-bit alt 2), i.e. 13 frames per microframe — the
+96 kHz ceiling FiiO documents for the KA17's S/PDIF output. So the
+4-interface layout and the per-channel Volume bits come with either mode,
+not with the EQ as such; only the plain mode enumerates the 5-interface,
+776/388-byte layout.
 
 DEVICE+CONFIG0 (334 bytes):
 12 01 00 02 EF 02 01 40 72 29 93 00 25 02 01 03 00 02 09 02 3C 01 04 01

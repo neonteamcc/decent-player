@@ -725,9 +725,9 @@ class UsbAudioDescriptorParserTest {
     }
 
     // FiiO KA17, same unit and firmware as [ka17], captured on Android with
-    // its own EQ enabled (fiio-ka17-eq-…) and then with S/PDIF out on as well
-    // (fiio-ka17-spdif-…). The device re-enumerates with smaller packets per
-    // mode; clock, units and volume stay put.
+    // its own EQ enabled (fiio-ka17-eq-…) and, separately, with the EQ off
+    // and S/PDIF out on (fiio-ka17-spdif-…). The device re-enumerates with
+    // smaller packets per mode; clock, units and volume stay put.
     private val ka17Eq = hex(
             "12 01 00 02 EF 02 01 40 72 29 93 00 25 02 01 03 00 02 09 02 3C 01 04 01",
             "00 C0 00 08 0B 00 02 01 00 20 00 09 04 00 00 00 01 01 20 03 09 24 01 00",
