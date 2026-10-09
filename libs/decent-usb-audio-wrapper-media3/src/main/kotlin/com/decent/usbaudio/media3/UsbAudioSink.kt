@@ -826,24 +826,7 @@ class UsbAudioSink(
      *  [currentSampleRate] when decimation is active. */
     private var currentUsbRate: Int = 0
 
-    /**
-     * Map a track rate onto the device.
-     *
-     * Acceptance for a candidate rate: advertised by the alt setting
-     * (UAC1 Format Type I list) AND by the device (UAC2 clock RANGE list
-     * in [UsbAudioDeviceInfo.sampleRates], when known) AND, at full
-     * speed, fits the wMaxPacketSize budget AND, on MaxPacketsOnly
-     * devices, produces exactly wMaxPacketSize-sized nominal packets
-     * (such firmwares — FiiO BTR3 class — misbehave at every other rate;
-     * that is the historical BTR3 44.1 kHz Linux bug).
-     *
-     * Preference order: exact → in-family ÷2/÷4 (half-band, cheapest) →
-     * smallest acceptable rate above the track (content-preserving
-     * upsample, e.g. 44.1k → 48k) → largest acceptable below. No
-     * acceptable candidate → passthrough attempt, as before.
-     *
-     * @return Pair(usbRate, conversionInputRate) — input 0 = passthrough.
-     */
+    /** Map a track rate onto the device; see [com.decent.usbaudio.descriptor.UsbRateChoice]. */
     private fun chooseUsbRate(
         info: com.decent.usbaudio.UsbAudioDeviceInfo,
         altSetting: Int,
@@ -851,26 +834,7 @@ class UsbAudioSink(
     ): Pair<Int, Int> {
         val alt = info.layout?.streamingAlts?.firstOrNull { it.altSetting == altSetting }
             ?: return trackRate to 0
-        val deviceRates = info.sampleRates
-        fun ok(r: Int): Boolean {
-            if (!alt.supportsRate(r)) return false
-            if (deviceRates.isNotEmpty() && r !in deviceRates) return false
-            if (info.busSpeed == com.decent.usbaudio.descriptor.UsbBusSpeed.FULL) {
-                if (!alt.rateFitsMaxPacket(r)) return false
-                if (alt.maxPacketsOnly &&
-                    (r % 1000 != 0 || (r / 1000) * alt.bytesPerFrame != alt.maxPacketSize)
-                ) return false
-            }
-            return true
-        }
-        if (ok(trackRate)) return trackRate to 0
-        if (trackRate % 2 == 0 && ok(trackRate / 2)) return trackRate / 2 to trackRate
-        if (trackRate % 4 == 0 && ok(trackRate / 4)) return trackRate / 4 to trackRate
-        val candidates = (alt.sampleRates + deviceRates).distinct().filter { ok(it) }
-        val target = candidates.filter { it > trackRate }.minOrNull()
-            ?: candidates.filter { it < trackRate }.maxOrNull()
-            ?: return trackRate to 0 // nothing known — passthrough attempt
-        return target to trackRate
+        return com.decent.usbaudio.descriptor.UsbRateChoice.choose(alt, info.sampleRates, info.busSpeed, trackRate)
     }
 
     /** wMaxPacketSize of the alt setting's feedback endpoint, or 0. */

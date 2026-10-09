@@ -820,6 +820,36 @@ class UsbAudioDescriptorParserTest {
         assertEquals(listOf(1, 2), vol.writeChannels)
     }
 
+    // Rates a UAC2 clock RANGE can claim regardless of the alt's packet
+    // budget: the KA17 modes below cut the packets, not (necessarily) the
+    // clock's list — whether it trims the list is a device answer the
+    // descriptors cannot show, so the packet budget must hold on its own.
+    private val fullRange = listOf(44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600, 768000)
+
+    private fun choose(bytes: ByteArray, speed: UsbBusSpeed, track: Int, rates: List<Int> = fullRange) =
+            UsbRateChoice.choose(UsbAudioDescriptorParser.parse(bytes)!!.selectPlaybackAlt(1, true)!!, rates, speed, track)
+
+    @Test
+    fun rateChoice_keepsHighSpeedPacketsWithinTheirBudget() {
+        // EQ mode: 200-byte 32-bit packets hold 24 frames per microframe.
+        assertEquals(192000 to 0, choose(ka17Eq, UsbBusSpeed.HIGH, 192000))
+        assertEquals(192000 to 384000, choose(ka17Eq, UsbBusSpeed.HIGH, 384000))
+        assertEquals(176400 to 352800, choose(ka17Eq, UsbBusSpeed.HIGH, 352800))
+        // S/PDIF: 104 bytes, 12 frames per microframe — the 96 kHz ceiling.
+        assertEquals(96000 to 192000, choose(ka17Spdif, UsbBusSpeed.HIGH, 192000))
+        assertEquals(88200 to 176400, choose(ka17Spdif, UsbBusSpeed.HIGH, 176400))
+        assertEquals(96000 to 768000, choose(ka17Spdif, UsbBusSpeed.HIGH, 768000))
+        // Plain mode: 776 bytes carry 768 kHz untouched.
+        assertEquals(768000 to 0, choose(ka17, UsbBusSpeed.HIGH, 768000))
+    }
+
+    @Test
+    fun rateChoice_fullSpeedUac1IsUnchanged() {
+        val rates = UsbAudioDescriptorParser.parse(ka17Uac1)!!.streamingAlts.single().sampleRates
+        assertEquals(96000 to 192000, choose(ka17Uac1, UsbBusSpeed.FULL, 192000, rates))
+        assertEquals(44100 to 0, choose(ka17Uac1, UsbBusSpeed.FULL, 44100, rates))
+    }
+
     private data class Quad(val mode: String, val bytes: ByteArray, val wide: Int, val narrow: Int)
 
     private fun hex(vararg rows: String): ByteArray =

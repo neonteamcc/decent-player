@@ -172,12 +172,19 @@ data class StreamingAltSetting(
     }
 
     /**
-     * True when [rate] fits this alt's bandwidth at full-speed 1 ms frames:
-     * the worst-case packet (nominal + 1 frame for the fractional carry)
-     * must not exceed wMaxPacketSize.
+     * True when [rate] fits this alt's bandwidth: the worst-case packet
+     * (nominal frames rounded up for the fractional carry) must not exceed
+     * wMaxPacketSize. One packet spans 2^(bInterval-1) bus intervals, and a
+     * bus interval is a 1 ms frame at full speed ([packetsPerSecond] 1000)
+     * or a 125 us microframe at high speed (8000) — the same geometry the
+     * native stream uses. A device can shrink its packets per mode while its
+     * clock still lists the higher rates (FiiO KA17 EQ / S/PDIF), so this is
+     * checked at every speed.
      */
-    fun rateFitsMaxPacket(rate: Int): Boolean {
-        val worstFrames = rate / 1000 + if (rate % 1000 != 0) 1 else 0
+    fun rateFitsMaxPacket(rate: Int, packetsPerSecond: Int = 1000): Boolean {
+        val busIntervals = 1L shl (interval.coerceIn(1, 16) - 1)
+        val perPacket = rate.toLong() * busIntervals
+        val worstFrames = perPacket / packetsPerSecond + if (perPacket % packetsPerSecond != 0L) 1 else 0
         return worstFrames * bytesPerFrame <= maxPacketSize
     }
 }
