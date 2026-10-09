@@ -1,8 +1,8 @@
 FiiO KA17 (2972:0093) with its on-device EQ enabled: byte-exact raw
 descriptors from `adb shell dumpsys usb dump-descriptors -dump-raw` on a
 Pixel 10 Pro XL, Android 17, firmware bcdDevice 2.25, captured 2026-10-09.
-The dump lists the configuration twice; the second copy is byte-identical
-and omitted. Same capture with the EQ enabled in bypass: byte-identical.
+The device has two configurations (bNumConfigurations 2); the second is
+byte-identical to the first and omitted. Same capture with the EQ enabled in bypass: byte-identical.
 With the EQ turned off the same device enumerates byte-identical to
 fiio-ka17-2972-0093-rawdescriptors.txt (first 359 bytes compared).
 

@@ -1,9 +1,9 @@
 FiiO KA17 (2972:0093) with its S/PDIF output switched on: byte-exact raw
 descriptors from `adb shell dumpsys usb dump-descriptors -dump-raw` on a
 Pixel 10 Pro XL, Android 17, firmware bcdDevice 2.25, captured 2026-10-09
-with the EQ off and S/PDIF out on (as reported by the device owner). The
-dump lists the configuration twice; the second copy is byte-identical and
-omitted.
+with the EQ off and S/PDIF out on (as reported by the device owner).
+The device has two configurations (bNumConfigurations 2); the second is
+byte-identical to the first and omitted.
 
 The only bytes that differ from fiio-ka17-eq-2972-0093-rawdescriptors.txt
 are the three playback wMaxPacketSize values: 104 bytes (32-bit alts 1
@@ -16,6 +16,12 @@ not with the EQ as such; only the plain mode enumerates the 5-interface,
 With the EQ switched on as well and the KA17 replugged (fresh
 enumeration), the capture is byte-identical to this one: S/PDIF out's
 96 kHz layout wins over the EQ's 192 kHz one.
+
+With UAC 1.0 mode selected and S/PDIF out on, the unit enumerates as this
+same UAC2 layout at high speed: S/PDIF wins over the UAC1 setting too.
+Read on macOS via libusb GET_DESCRIPTOR (device + both configurations,
+650 bytes) and byte-identical to this Android capture, also after a
+libusb_reset_device re-enumeration.
 
 DEVICE+CONFIG0 (334 bytes):
 12 01 00 02 EF 02 01 40 72 29 93 00 25 02 01 03 00 02 09 02 3C 01 04 01
